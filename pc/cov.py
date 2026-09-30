@@ -79,6 +79,19 @@ def cov_lw_identity(X: pd.DataFrame) -> tuple[pd.DataFrame, float]:
     return _frame(Sigma, X), float(shrinkage)
 
 
+def ewma_weights(n: int, lam: float) -> np.ndarray:
+    """w_k = (1 - lam) lam^k / (1 - lam^n), returned in row order: k = 0 is the last row."""
+    k = np.arange(n - 1, -1, -1)
+    return (1 - lam) * lam**k / (1 - lam**n)
+
+
+def cov_ewma(X: pd.DataFrame, lam: float) -> pd.DataFrame:
+    """sum_k w_k r_{t-k} r_{t-k}', no demeaning."""
+    x = X.to_numpy(dtype=float)
+    w = ewma_weights(len(x), lam)
+    return _frame((x * w[:, None]).T @ x, X)
+
+
 def _cond(S: np.ndarray) -> float:
     """lambda_max / lambda_min of a symmetric matrix; inf when lambda_min <= 0."""
     eig = np.linalg.eigvalsh(S)
