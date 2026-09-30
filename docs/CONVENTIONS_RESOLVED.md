@@ -22,3 +22,4 @@ Each convention below is fixed by `instructions/00_kickoff.md`. Where it differs
 18. **BL covariance.** The Black-Litterman allocator optimises on μ_BL with Σ_BL. The round-trip test (mean-variance on (Π, Σ) with γ = δ returns w_mkt) uses Σ, not Σ_BL.
 19. **Two output tables.** The source doc asked for one long DataFrame. `weights_long.parquet` (per asset) and `periods.parquet` (per period), keyed by (strategy_id, decision_date), replace it because per-asset and per-period fields do not share a grain.
 20. **Package layout.** The package is named `pc`; the CLI lives in `pc/cli.py` (console script `pctrade`), not a top-level `cli.py`.
+21. **Black-Litterman allocator.** `black_litterman(mu, Sigma, w_prev, cons) -> AllocResult` in `pc/allocators.py` is a thin wrapper that calls `mv_constrained` unchanged. The backtest computes μ_BL and Σ_BL in its return-model stage and passes them in as `mu` and `Sigma`.
