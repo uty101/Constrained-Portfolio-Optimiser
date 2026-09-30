@@ -3,11 +3,14 @@ import pandas as pd
 import pytest
 
 from pc.cov import (
+    _daily_estimate,
+    _monthly_unconditioned,
     _pca_corr,
     condition_cov,
     cov_ewma,
     cov_pca,
     cov_sample,
+    estimate_cov,
     ewma_weights,
     window_daily,
 )
@@ -116,3 +119,20 @@ def test_pca_positive_definite(X, cfg):
 def test_pca_full_rank_equals_sample(X):
     full = cov_pca(X, X.shape[1])
     assert np.allclose(full.to_numpy(), cov_sample(X).to_numpy(), rtol=1e-10, atol=0)
+
+def test_monthly_is_daily_times_21_exactly(returns_d, X, cfg):
+    t = pd.Timestamp(cfg.sample.first_decision)
+    for name in cfg.cov.estimators:
+        monthly, _ = _monthly_unconditioned(returns_d, t, name, cfg)
+        daily, _ = _daily_estimate(X, name, cfg)
+        assert (monthly.to_numpy() == 21 * daily.to_numpy()).all(), name
+
+
+def test_conditioning_log_fields_always_present(returns_d, cfg):
+    t = pd.Timestamp(cfg.sample.first_decision)
+    for name in cfg.cov.estimators:
+        Sigma, log = estimate_cov(returns_d, t, name, cfg)
+        assert set(log) == {"cond_before", "cond_after", "ridge", "lw_delta"}, name
+        assert log["cond_after"] <= cfg.cov.max_cond * (1 + 1e-6)
+        assert np.isnan(log["lw_delta"]) == (name != "lw_cc")
+        np.testing.assert_array_equal(Sigma.to_numpy(), Sigma.to_numpy().T)

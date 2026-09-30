@@ -9,6 +9,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from pc.config import Config
+
 
 def window_daily(returns_d: pd.DataFrame, t: pd.Timestamp, months: int) -> pd.DataFrame:
     """Rows with date in (t - months, t]: exclusive start, inclusive end."""
@@ -130,3 +132,35 @@ def condition_cov(S: pd.DataFrame, max_cond: float) -> tuple[pd.DataFrame, dict]
         A = A + ridge * np.eye(len(A))
     log = {"cond_before": cond_before, "cond_after": _cond(A), "ridge": ridge}
     return pd.DataFrame(A, index=S.index, columns=S.columns), log
+
+
+def _daily_estimate(X: pd.DataFrame, name: str, cfg: Config) -> tuple[pd.DataFrame, float]:
+    """(daily Sigma, lw_delta); lw_delta is NaN for every estimator but lw_cc."""
+    if name == "sample":
+        return cov_sample(X), float("nan")
+    if name == "lw_cc":
+        return cov_lw_cc(X)
+    if name == "ewma":
+        return cov_ewma(X, cfg.cov.ewma_lambda), float("nan")
+    if name == "pca3":
+        return cov_pca(X, cfg.cov.pca_k), float("nan")
+    raise ValueError(f"unknown estimator {name!r}; expected one of {cfg.cov.estimators}")
+
+
+def _monthly_unconditioned(
+    returns_d: pd.DataFrame, t: pd.Timestamp, name: str, cfg: Config
+) -> tuple[pd.DataFrame, float]:
+    """Daily estimate on the window_months window ending at t, times days_per_month."""
+    if name not in cfg.cov.estimators:
+        raise ValueError(f"unknown estimator {name!r}; expected one of {cfg.cov.estimators}")
+    X = window_daily(returns_d, t, cfg.sample.window_months)
+    daily, lw_delta = _daily_estimate(X, name, cfg)
+    return daily * cfg.sample.days_per_month, lw_delta
+
+
+def estimate_cov(returns_d: pd.DataFrame, t: pd.Timestamp, name: str, cfg: Config) -> tuple[pd.DataFrame, dict]:
+    """Monthly conditioned Sigma and its log: cond_before, cond_after, ridge, lw_delta."""
+    monthly, lw_delta = _monthly_unconditioned(returns_d, t, name, cfg)
+    Sigma, log = condition_cov(monthly, cfg.cov.max_cond)
+    log["lw_delta"] = lw_delta
+    return Sigma, log
