@@ -86,6 +86,7 @@ class SolverConfig:
     primary: str
     fallback: str
     scs_eps: float
+    clarabel_tol: float
     rp_ftol: float
     rp_gtol: float
     rp_maxiter: int
