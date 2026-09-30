@@ -1,22 +1,14 @@
-# Python
+data/processed/**
+.env
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-*.egg-info/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 .ipynb_checkpoints/
-
-# Secrets
-.env
-
-# Data caches (re-downloadable)
-data/cache/
-data/raw/
-
-# OS / editor
+*.egg-info/
 .DS_Store
 Thumbs.db
 ~$*

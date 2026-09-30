@@ -5,6 +5,12 @@ Claude Desktop can review from GitHub. Newest entries at the top.
 
 ---
 
+## 2026-09-30 — Log retired
+
+From session 0 onward, status lives in `instructions/NN_<name>.status.md` and review files in `review/`. This file is retired and is never written to again.
+
+---
+
 ## 2026-09-30 — Repo set up
 
 **Status:** Read `Project Outline/03_Portfolio_Optimiser.docx`. No code written yet;
