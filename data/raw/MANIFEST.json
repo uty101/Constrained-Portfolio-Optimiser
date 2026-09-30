@@ -1,0 +1,94 @@
+{
+  "pulled_at_utc": "2026-09-30T14:52:35Z",
+  "yfinance_version": "1.7.0",
+  "sources": {
+    "prices": "yfinance download, auto_adjust=True, Close",
+    "rf": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3MO"
+  },
+  "range": {
+    "start": "2007-04-11",
+    "end": "2026-09-15"
+  },
+  "row_counts": {
+    "prices_adjclose.csv": 4889,
+    "rf_dgs3mo.csv": 5070
+  },
+  "tickers": {
+    "SPY": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "IWM": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "EFA": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "EEM": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "XLE": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "XLF": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "XLK": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "XLU": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "XLV": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "SHY": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "IEF": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "TLT": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "TIP": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "LQD": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "HYG": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "GLD": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "DBC": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    },
+    "VNQ": {
+      "first_date": "2007-04-11",
+      "last_date": "2026-09-15"
+    }
+  },
+  "sha256": {
+    "prices_adjclose.csv": "eec844cad43481d8567ff8e06a63b1b758e9a30baac6223093e023547e6bc3db",
+    "rf_dgs3mo.csv": "af623ba0928595927199cecd6f11afe78a95a1d4831717dd85c549f23269dedc"
+  }
+}

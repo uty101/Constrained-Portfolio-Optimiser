@@ -1,0 +1,2 @@
+# Raw snapshots are hashed in MANIFEST.json; never let git rewrite their line endings.
+data/raw/** -text
