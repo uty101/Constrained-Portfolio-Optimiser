@@ -14,7 +14,7 @@ import cvxpy as cp
 import numpy as np
 import pandas as pd
 
-from pc.solver import SolveRecord, merge_records
+from pc.solver import SolveRecord, merge_records, solve, symmetrise
 
 
 @dataclass(frozen=True)
@@ -97,3 +97,49 @@ def solved_result(
         tau_relaxed=tau_relaxed,
         tau_eff=tau_eff,
     )
+
+
+def _bounds(w: cp.Variable, cons: Constraints) -> dict[str, cp.Constraint]:
+    """Budget, and each bound that is not None, keyed budget / lower / upper."""
+    out = {"budget": cp.sum(w) == cons.budget}
+    if cons.lower is not None:
+        out["lower"] = w >= cons.lower
+    if cons.upper is not None:
+        out["upper"] = w <= cons.upper
+    return out
+
+
+def mv_unconstrained(mu, Sigma, w_prev, cons) -> AllocResult:
+    """Set A closed form: w = (1/gamma) Sigma^-1 (mu - eta 1), eta = (1' Sigma^-1 mu - gamma budget) / (1' Sigma^-1 1).
+
+    No solver. cons.gamma and cons.budget are read; bounds, turnover and cost are not.
+    """
+    index = check_index(mu, Sigma, w_prev, cons)
+    m = mu.to_numpy(dtype=float)
+    S = Sigma.to_numpy(dtype=float)
+    ab = np.linalg.solve(S, np.column_stack([m, np.ones(len(m))]))
+    a, b = ab[:, 0], ab[:, 1]
+    eta = (a.sum() - cons.gamma * cons.budget) / b.sum()
+    w = (a - eta * b) / cons.gamma
+    objective = float(m @ w - cons.gamma / 2 * w @ S @ w)
+    return AllocResult(
+        weights=pd.Series(w, index=index),
+        solver="closed_form",
+        status="optimal",
+        fallback=False,
+        objective=objective,
+        turnover_dual=math.nan,
+        tau_relaxed=False,
+        tau_eff=math.nan,
+    )
+
+
+def min_variance(mu, Sigma, w_prev, cons) -> AllocResult:
+    """Set B: min w' Sigma w (Sigma symmetrised) s.t. 1'w = budget, lower <= w <= upper. mu is not read.
+
+    objective is the monthly variance w' Sigma w.
+    """
+    index = check_index(mu, Sigma, w_prev, cons)
+    w = cp.Variable(len(index))
+    prob = cp.Problem(cp.Minimize(cp.quad_form(w, symmetrise(Sigma))), list(_bounds(w, cons).values()))
+    return solved_result(w, prob, [solve(prob)], index, w_prev)
