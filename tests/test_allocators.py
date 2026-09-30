@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 from conftest import REAL_DATES
 
-from pc.allocators import Constraints, min_variance, mv_constrained, mv_problem, mv_unconstrained
-from pc.risk import gmv_closed_form
+from pc.allocators import Constraints, min_variance, mv_constrained, mv_problem, mv_unconstrained, risk_parity
+from pc.risk import gmv_closed_form, pct_risk_contributions
 from pc.solver import solve, solver_config
 
 CASES = list(itertools.product(REAL_DATES, ("sample", "lw_cc", "ewma", "pca3")))
@@ -172,3 +172,18 @@ def test_allocator_fallback_holds_w_prev_or_equal_weight(real, cfg, monkeypatch,
     assert res.solver.split("+")[-2:] == ["CLARABEL", "SCS"]
     expected = w_prev if has_w_prev else _equal(cfg)
     np.testing.assert_array_equal(res.weights.to_numpy(), expected.to_numpy())
+
+
+@pytest.mark.parametrize("t,name", CASES)
+def test_risk_parity_equal_contributions_real_sigma(real, t, name):
+    Sigma = real.sigma(t, name)
+    res = risk_parity(None, Sigma, None, Constraints())
+    pct = pct_risk_contributions(res.weights, Sigma)
+    assert np.max(np.abs(pct - 1 / len(pct))) <= 1e-6
+
+
+@pytest.mark.parametrize("t,name", CASES)
+def test_risk_parity_weights_positive_sum_to_one(real, t, name):
+    res = risk_parity(None, real.sigma(t, name), None, Constraints())
+    assert (res.weights > 0).all()
+    assert abs(res.weights.sum() - 1) <= 1e-12

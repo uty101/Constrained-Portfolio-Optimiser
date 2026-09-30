@@ -13,8 +13,12 @@ from dataclasses import dataclass
 import cvxpy as cp
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 
-from pc.solver import SolveRecord, merge_records, solve, symmetrise, turnover_feasibility
+from pc.solver import SolveRecord, merge_records, solve, solver_config, symmetrise, turnover_feasibility
+
+# Kickoff 5.3 allocator 4: L-BFGS-B bounds (1e-12, None) (convention 22).
+RP_LOWER = 1e-12
 
 
 @dataclass(frozen=True)
@@ -192,3 +196,42 @@ def mv_constrained(mu, Sigma, w_prev, cons) -> AllocResult:
     prob, w, constraints = mv_problem(mu, Sigma, w_prev, cons, limit)
     records.append(solve(prob))
     return solved_result(w, prob, records, index, w_prev, constraints.get("turnover"), tau_relaxed, tau_eff)
+
+
+def risk_parity(mu, Sigma, w_prev, cons) -> AllocResult:
+    """Spinu: min 1/2 x'Sigma x - sum_i b_i log x_i, b_i = 1/N, by L-BFGS-B; w = x / 1'x.
+
+    Long-only, no caps; mu and cons are not read, w_prev only for the index check.
+    Gradient Sigma x - b/x, bounds (1e-12, None), x0 = 1/sqrt(diag Sigma), ftol, gtol and
+    maxiter from [solver]. status is "optimal" when scipy reports success, else scipy's
+    message; the weights are x / 1'x either way. objective is NaN.
+    """
+    index = check_index(mu, Sigma, w_prev, cons)
+    S = symmetrise(Sigma)
+    n = len(S)
+    b = np.full(n, 1.0 / n)
+    scfg = solver_config()
+
+    def f(x):
+        Sx = S @ x
+        return 0.5 * x @ Sx - b @ np.log(x), Sx - b / x
+
+    res = minimize(
+        f,
+        1.0 / np.sqrt(np.diag(S)),
+        jac=True,
+        method="L-BFGS-B",
+        bounds=[(RP_LOWER, None)] * n,
+        options={"ftol": scfg.rp_ftol, "gtol": scfg.rp_gtol, "maxiter": scfg.rp_maxiter},
+    )
+    x = res.x
+    return AllocResult(
+        weights=pd.Series(x / x.sum(), index=index),
+        solver="L-BFGS-B",
+        status="optimal" if res.success else str(res.message),
+        fallback=False,
+        objective=math.nan,
+        turnover_dual=math.nan,
+        tau_relaxed=False,
+        tau_eff=math.nan,
+    )
