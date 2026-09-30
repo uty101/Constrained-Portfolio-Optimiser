@@ -235,3 +235,23 @@ def risk_parity(mu, Sigma, w_prev, cons) -> AllocResult:
         tau_relaxed=False,
         tau_eff=math.nan,
     )
+
+
+def black_litterman(mu, Sigma, w_prev, cons) -> AllocResult:
+    """mv_constrained unchanged; the caller passes mu_BL as mu and Sigma_BL as Sigma (convention 21)."""
+    return mv_constrained(mu, Sigma, w_prev, cons)
+
+
+def equal_weight(mu, Sigma, w_prev, cons) -> AllocResult:
+    """1/N. mu and cons are not read; w_prev only for the index check. objective is NaN."""
+    index = check_index(mu, Sigma, w_prev, cons)
+    return AllocResult(
+        weights=pd.Series(1.0 / len(index), index=index),
+        solver="none",
+        status="optimal",
+        fallback=False,
+        objective=math.nan,
+        turnover_dual=math.nan,
+        tau_relaxed=False,
+        tau_eff=math.nan,
+    )

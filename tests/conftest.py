@@ -7,7 +7,7 @@ import pytest
 from pc.config import load_config
 from pc.cov import estimate_cov
 from pc.data import load_prices, load_rf_daily
-from pc.returns import daily_returns, monthly_excess_returns
+from pc.returns import _month_end_closes, daily_returns, monthly_excess_returns
 from pc.returns_model import mu_sample
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +37,10 @@ class RealData:
         self.rf_daily = load_rf_daily(cfg, self.prices.index)
         self.returns_d = daily_returns(self.prices)
         self.monthly_excess = monthly_excess_returns(self.prices, self.rf_daily)
+        # Month-end to month-end total returns on the same index as monthly_excess.
+        total = _month_end_closes(self.prices).pct_change(fill_method=None).iloc[1:]
+        total.index = pd.DatetimeIndex(total.index, name="date")
+        self.monthly_total = total
         self._sigma = {}
 
     def sigma(self, t, name):
