@@ -92,6 +92,23 @@ def cov_ewma(X: pd.DataFrame, lam: float) -> pd.DataFrame:
     return _frame((x * w[:, None]).T @ x, X)
 
 
+def _pca_corr(R: np.ndarray, k: int) -> np.ndarray:
+    """R_f = V_k L_k V_k' + diag(1 - diag(V_k L_k V_k')), the k largest eigenpairs of R."""
+    vals, vecs = np.linalg.eigh(R)
+    top = np.argsort(vals)[::-1][:k]
+    L = (vecs[:, top] * vals[top]) @ vecs[:, top].T
+    L = 0.5 * (L + L.T)
+    return L + np.diag(1 - np.diag(L))
+
+
+def cov_pca(X: pd.DataFrame, k: int) -> pd.DataFrame:
+    """D R_f D, R the sample correlation and D the sample vols (ddof 1)."""
+    S = np.cov(X.to_numpy(dtype=float), rowvar=False, ddof=1)
+    sd = np.sqrt(np.diag(S))
+    R = S / np.outer(sd, sd)
+    return _frame(np.outer(sd, sd) * _pca_corr(R, k), X)
+
+
 def _cond(S: np.ndarray) -> float:
     """lambda_max / lambda_min of a symmetric matrix; inf when lambda_min <= 0."""
     eig = np.linalg.eigvalsh(S)

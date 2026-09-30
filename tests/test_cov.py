@@ -2,7 +2,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pc.cov import condition_cov, cov_ewma, ewma_weights, window_daily
+from pc.cov import (
+    _pca_corr,
+    condition_cov,
+    cov_ewma,
+    cov_pca,
+    cov_sample,
+    ewma_weights,
+    window_daily,
+)
 from pc.data import load_prices
 from pc.returns import daily_returns
 
@@ -86,3 +94,25 @@ def test_ewma_lambda_near_zero_is_last_outer_product(X):
     # The row before the last still carries weight ~1e-12, about 1e-15 in absolute terms.
     np.testing.assert_allclose(out.to_numpy(), np.outer(last, last), rtol=1e-10, atol=1e-14)
     assert list(out.index) == list(X.columns)
+
+
+def sample_corr(X):
+    S = cov_sample(X).to_numpy()
+    sd = np.sqrt(np.diag(S))
+    return S / np.outer(sd, sd)
+
+
+def test_pca_rf_unit_diagonal(X, cfg):
+    Rf = _pca_corr(sample_corr(X), cfg.cov.pca_k)
+    np.testing.assert_allclose(np.diag(Rf), 1.0, rtol=0, atol=1e-14)
+
+
+def test_pca_positive_definite(X, cfg):
+    Sigma = cov_pca(X, cfg.cov.pca_k).to_numpy()
+    np.testing.assert_array_equal(Sigma, Sigma.T)
+    assert np.linalg.eigvalsh(Sigma)[0] > 0
+
+
+def test_pca_full_rank_equals_sample(X):
+    full = cov_pca(X, X.shape[1])
+    assert np.allclose(full.to_numpy(), cov_sample(X).to_numpy(), rtol=1e-10, atol=0)
