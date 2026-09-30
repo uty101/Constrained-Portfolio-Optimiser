@@ -14,7 +14,7 @@ import cvxpy as cp
 import numpy as np
 import pandas as pd
 
-from pc.solver import SolveRecord, merge_records, solve, symmetrise
+from pc.solver import SolveRecord, merge_records, solve, symmetrise, turnover_feasibility
 
 
 @dataclass(frozen=True)
@@ -143,3 +143,52 @@ def min_variance(mu, Sigma, w_prev, cons) -> AllocResult:
     w = cp.Variable(len(index))
     prob = cp.Problem(cp.Minimize(cp.quad_form(w, symmetrise(Sigma))), list(_bounds(w, cons).values()))
     return solved_result(w, prob, [solve(prob)], index, w_prev)
+
+
+def mv_problem(
+    mu: pd.Series,
+    Sigma: pd.DataFrame,
+    w_prev: pd.Series | None,
+    cons: Constraints,
+    tau_eff: float | None,
+) -> tuple[cp.Problem, cp.Variable, dict[str, cp.Constraint]]:
+    """max mu'w - gamma/2 quad_form(w, Sigma) - cost @ |w - w_prev| over the bounds of cons.
+
+    With w_prev given, the cost term is built even when cons.cost is None (cost 0), and
+    tau_eff not None adds norm1(w - w_prev) <= tau_eff. With w_prev None there is neither.
+    The constraints are returned keyed budget / lower / upper / turnover.
+    """
+    w = cp.Variable(len(Sigma))
+    constraints = _bounds(w, cons)
+    objective = mu.to_numpy(dtype=float) @ w - cons.gamma / 2 * cp.quad_form(w, symmetrise(Sigma))
+    if w_prev is not None:
+        prev = w_prev.to_numpy(dtype=float)
+        cost = np.zeros(len(prev)) if cons.cost is None else cons.cost.to_numpy(dtype=float)
+        objective = objective - cost @ cp.abs(w - prev)
+        if tau_eff is not None:
+            constraints["turnover"] = cp.norm1(w - prev) <= tau_eff
+    prob = cp.Problem(cp.Maximize(objective), list(constraints.values()))
+    return prob, w, constraints
+
+
+def mv_constrained(mu, Sigma, w_prev, cons) -> AllocResult:
+    """Set C, or set B when turnover and costs are off (kickoff 5.3, allocator 2).
+
+    With w_prev and cons.max_turnover both given, the feasibility LP runs first and the
+    turnover limit is tau_eff (tau, or tau_min + 1e-6 when tau_min > tau). turnover_dual is
+    the dual of that constraint: monthly return per unit of turnover.
+    """
+    index = check_index(mu, Sigma, w_prev, cons)
+    records = []
+    tau_eff, tau_relaxed = math.nan, False
+    if w_prev is not None and cons.max_turnover is not None:
+        _, tau_eff, tau_relaxed, record = turnover_feasibility(
+            w_prev, cons.max_turnover, cons.lower, cons.upper, cons.budget
+        )
+        records.append(record)
+        if record.fallback:
+            return solved_result(None, None, records, index, w_prev, None, tau_relaxed, tau_eff)
+    limit = None if math.isnan(tau_eff) else tau_eff
+    prob, w, constraints = mv_problem(mu, Sigma, w_prev, cons, limit)
+    records.append(solve(prob))
+    return solved_result(w, prob, records, index, w_prev, constraints.get("turnover"), tau_relaxed, tau_eff)
