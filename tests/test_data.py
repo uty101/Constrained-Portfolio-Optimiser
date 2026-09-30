@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pc.data import load_prices, load_rf_daily, validate_prices
+from pc.data import corr_full_sample, data_summary, load_prices, load_rf_daily, validate_prices
 
 
 def _with_data(cfg, **paths):
@@ -91,3 +91,32 @@ def test_validate_flags_each_issue_type(cfg):
     assert gap["value"].iloc[0] == 6
     dup = issues[issues.issue == "duplicate_date"]
     assert dup["value"].iloc[0] == 2
+
+
+def test_data_summary_columns_and_rows(cfg):
+    summary = data_summary(load_prices(cfg), cfg)
+    assert list(summary.columns) == [
+        "ticker", "first_date", "last_date", "n_days", "ann_return", "ann_vol",
+        "worst_day", "worst_date", "best_day", "best_date",
+    ]
+    assert len(summary) == 18
+    assert list(summary["ticker"]) == list(cfg.universe.tickers)
+
+
+def test_data_summary_annualisation(cfg):
+    idx = pd.bdate_range("2020-01-01", periods=4, name="date")
+    prices = pd.DataFrame({"SPY": 100.0 * np.cumprod([1.0, 1.01, 0.98, 1.03])}, index=idx)
+    row = data_summary(prices, cfg).iloc[0]
+    assert row["n_days"] == 3
+    assert abs(row["ann_return"] - ((1.01 * 0.98 * 1.03) ** (252 / 3) - 1)) <= 1e-12
+    assert abs(row["ann_vol"] - np.std([0.01, -0.02, 0.03], ddof=1) * np.sqrt(252)) <= 1e-12
+    assert row["worst_date"] == idx[2] and row["best_date"] == idx[3]
+
+
+def test_corr_full_sample_symmetric_unit_diagonal(cfg):
+    corr = corr_full_sample(load_prices(cfg))
+    assert list(corr.columns) == ["ticker", *cfg.universe.tickers]
+    assert list(corr["ticker"]) == list(cfg.universe.tickers)
+    m = corr.drop(columns="ticker").to_numpy()
+    np.testing.assert_allclose(m, m.T, rtol=0, atol=1e-15)
+    np.testing.assert_allclose(np.diag(m), 1.0, rtol=0, atol=1e-15)

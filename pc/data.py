@@ -7,9 +7,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from pc.config import Config
+from pc.returns import daily_returns
 
 ISSUE_COLUMNS = ["date", "ticker", "issue", "value"]
 ALL_TICKERS = "ALL"
@@ -103,3 +105,41 @@ def write_data_issues(cfg: Config) -> Path:
     path = Path(cfg.outputs.tables_dir) / "data_issues.csv"
     issues.to_csv(path, index=False, float_format="%.10g", date_format="%Y-%m-%d", lineterminator="\n")
     return path
+
+
+def data_summary(prices: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """Per-ticker summary of daily returns, geometric annualisation with D = 12 × days_per_month.
+
+    first_date and last_date are the first and last price dates; n_days is the number of
+    daily returns.
+    """
+    rets = daily_returns(prices)
+    D = 12 * cfg.sample.days_per_month
+    n = rets.count()
+    return pd.DataFrame({
+        "ticker": prices.columns,
+        "first_date": [prices[t].first_valid_index() for t in prices.columns],
+        "last_date": [prices[t].last_valid_index() for t in prices.columns],
+        "n_days": n.to_numpy(),
+        "ann_return": ((1 + rets).prod() ** (D / n) - 1).to_numpy(),
+        "ann_vol": (rets.std(ddof=1) * np.sqrt(D)).to_numpy(),
+        "worst_day": rets.min().to_numpy(),
+        "worst_date": rets.idxmin().to_numpy(),
+        "best_day": rets.max().to_numpy(),
+        "best_date": rets.idxmax().to_numpy(),
+    })
+
+
+def corr_full_sample(prices: pd.DataFrame) -> pd.DataFrame:
+    """Correlation of daily returns over the full panel, first column ticker."""
+    corr = daily_returns(prices).corr()
+    return corr.rename_axis("ticker").reset_index().rename_axis(None, axis=1)
+
+
+def write_data_summary(cfg: Config) -> tuple[Path, Path]:
+    prices = load_prices(cfg)
+    out = Path(cfg.outputs.tables_dir)
+    kwargs = dict(index=False, float_format="%.10g", date_format="%Y-%m-%d", lineterminator="\n")
+    data_summary(prices, cfg).to_csv(out / "data_summary.csv", **kwargs)
+    corr_full_sample(prices).to_csv(out / "corr_full_sample.csv", **kwargs)
+    return out / "data_summary.csv", out / "corr_full_sample.csv"
