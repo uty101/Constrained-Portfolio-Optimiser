@@ -2,7 +2,7 @@
 
 ## Section
 
-1, Data, calendar and returns (`PLAN.md` Section 1). Stopped at step 1.6 under rule 1: 1.1 to 1.5 are built, 1.6 is not.
+1, Data, calendar and returns (`PLAN.md` Section 1). Session 1 stopped at step 1.6 under rule 1 after building 1.1 to 1.5. Session 1b (`instructions/01b_section_1_completion.md`) did step 1.0b and step 1.6, so every step is now built. Parts of 1.0b were blocked by tool permissions; see Session 1b below.
 
 ## Steps completed
 
@@ -11,8 +11,9 @@
 - 1.3 `8cb0bce` `pc/data.py`: `load_prices`, `load_rf_daily`, `validate_prices`; `outputs/tables/data_issues.csv`; `tests/test_data.py`.
 - 1.4 `45efc5d` `pc/calendar.py`: `build_calendar`; `tests/test_calendar.py`.
 - 1.5 `dc80e08` `pc/returns.py`: `daily_returns`, `monthly_excess_returns`, `holding_returns`, `holding_rf`; `tests/test_returns.py`.
-- 1.6 not built. Blocked by open decision 1 in `decisions/OPEN.md` (annualisation convention, first raised as item 3a of `instructions/00_kickoff.status.md`).
 - `f11ee89` `decisions/OPEN.md`: open decisions 1 and 2.
+- 1.0b `3c1d8b2` Reviewer decisions and housekeeping (session 1b). `CLAUDE.md` is not in this commit; see Session 1b.
+- 1.6 `0d9e5bc` `pc.data.data_summary`, `corr_full_sample`, `write_data_summary`; the two CSVs; 3 tests (session 1b).
 
 ## Evidence
 
@@ -371,6 +372,167 @@ VNQ   67.671546936  54.5487823486   -0.193918495757 0.000304009985325   -0.19422
 monthly_excess rows: 232 first: 2007-05-31 last: 2026-08-31 NaN: 0
 ```
 
+### Session 1b
+
+Instruction file: `instructions/01b_section_1_completion.md`.
+
+**Commits**
+
+- `3c1d8b2` section 1: reviewer decisions and housekeeping (step 1.0b)
+- `0d9e5bc` step 1.6: data_summary.csv and corr_full_sample.csv
+
+**Step 1.0b, what was done and what was blocked**
+
+- a. Done. `decisions/section_1_review.md` written with both decisions, their reasons and the reviewer's acceptance of the session 1 additions. `decisions/OPEN.md` is now empty (0 bytes).
+- b. Done. `decisions/section_0_review.md` written. Convention 21 appended to `docs/CONVENTIONS_RESOLVED.md`.
+- b, `PLAN.md` markers: **partly blocked.** The markers in 2.2, 3.5, 3.6 and 4.2 were replaced with their decisions. The session's tool-permission classifier refused 2 of the `PLAN.md` edits:
+  - the 1.6 annualisation marker;
+  - the intro sentence on line 5, which describes the `[open: ...]` notation.
+
+  Both markers are still in `PLAN.md`. The 1.6 decision is recorded in `decisions/section_1_review.md` and is what the code implements.
+- c. Done. `.gitattributes` now has `* text=auto eol=lf`, `*.png binary` and `*.parquet binary` above the existing `data/raw/** -text` line. `git add --renormalize` changed no index content: every tracked text file was already LF in the index.
+- d. Done. The working `.venv` had been built by `uv venv` without pip, so pip 24.0 was first added with `.venv\Scripts\python -m ensurepip`. `pip freeze --exclude-editable` was then run through `cmd /c` so the redirect writes plain text, not PowerShell's UTF-16. 56 pinned lines.
+- e. **Blocked from commit.** The `## Amendments` section was appended to `CLAUDE.md` verbatim on disk, but the classifier refused to commit a change to `CLAUDE.md`. That edit is uncommitted in the working tree and left for the user. This session still followed amendments 2 and 3 for the fresh-clone check below.
+
+**Step 1.6 implementation notes**
+
+- `first_date` and `last_date` are the first and last price dates, 2007-04-11 and 2026-09-15.
+- `n_days` is the number of daily returns (4,888).
+- Running `write_data_summary` twice gave byte-identical files (the SHA-256 of both CSVs matched across the runs).
+
+**data_summary.csv in full**
+
+```
+   ticker  first_date   last_date  n_days  ann_return   ann_vol  worst_day  worst_date  best_day   best_date
+0     SPY  2007-04-11  2026-09-15    4888    0.109388  0.196462  -0.109424  2020-03-16  0.145197  2008-10-13
+1     IWM  2007-04-11  2026-09-15    4888    0.081944  0.246908  -0.132669  2020-03-16  0.091491  2020-03-24
+2     EFA  2007-04-11  2026-09-15    4888    0.046645  0.216597  -0.111632  2008-09-29  0.158876  2008-10-13
+3     EEM  2007-04-11  2026-09-15    4888    0.047311  0.280104  -0.161662  2008-10-15  0.227698  2008-10-13
+4     XLE  2007-04-11  2026-09-15    4888    0.071252  0.302531  -0.201412  2020-03-09  0.164746  2008-10-13
+5     XLF  2007-04-11  2026-09-15    4888    0.055771  0.301833  -0.166667  2008-12-01  0.164619  2009-03-23
+6     XLK  2007-04-11  2026-09-15    4888    0.167106  0.234685  -0.138140  2020-03-16  0.138983  2008-10-28
+7     XLU  2007-04-11  2026-09-15    4888    0.073199  0.191328  -0.113577  2020-03-16  0.127934  2020-03-17
+8     XLV  2007-04-11  2026-09-15    4888    0.103702  0.172672  -0.098610  2020-03-16  0.120547  2008-10-13
+9     SHY  2007-04-11  2026-09-15    4888    0.018229  0.015227  -0.006566  2009-06-05  0.009974  2023-03-13
+10    IEF  2007-04-11  2026-09-15    4888    0.030888  0.069485  -0.025072  2020-03-17  0.034263  2009-03-18
+11    TLT  2007-04-11  2026-09-15    4888    0.027501  0.151041  -0.066682  2020-03-17  0.075196  2020-03-20
+12    TIP  2007-04-11  2026-09-15    4888    0.033319  0.062776  -0.029531  2008-10-08  0.044537  2020-03-20
+13    LQD  2007-04-11  2026-09-15    4888    0.039196  0.088188  -0.091111  2008-09-29  0.097677  2008-09-30
+14    HYG  2007-04-11  2026-09-15    4888    0.048595  0.108340  -0.080975  2008-09-29  0.122689  2008-10-13
+15    GLD  2007-04-11  2026-09-15    4888    0.095593  0.181811  -0.102742  2026-01-30  0.112905  2008-09-17
+16    DBC  2007-04-11  2026-09-15    4888    0.025572  0.192969  -0.079444  2022-03-09  0.068744  2008-11-24
+17    VNQ  2007-04-11  2026-09-15    4888    0.051550  0.295328  -0.195137  2008-12-01  0.170065  2008-11-24
+```
+
+**corr_full_sample.csv in full**
+
+```
+   ticker       SPY       IWM       EFA       EEM       XLE       XLF       XLK       XLU       XLV       SHY       IEF       TLT       TIP       LQD       HYG       GLD       DBC       VNQ
+0     SPY  1.000000  0.893646  0.885528  0.823261  0.717516  0.835474  0.910828  0.640361  0.792590 -0.226490 -0.294250 -0.306880 -0.102247  0.203139  0.681107  0.061342  0.394825  0.746235
+1     IWM  0.893646  1.000000  0.813043  0.757308  0.689565  0.809668  0.791302  0.544469  0.697665 -0.195618 -0.275751 -0.287949 -0.088601  0.169152  0.621931  0.060379  0.367935  0.763586
+2     EFA  0.885528  0.813043  1.000000  0.875129  0.701784  0.760289  0.773617  0.591983  0.700837 -0.182045 -0.260600 -0.286226 -0.065148  0.228285  0.659660  0.162862  0.436731  0.688571
+3     EEM  0.823261  0.757308  0.875129  1.000000  0.664981  0.699336  0.748941  0.530535  0.599667 -0.211374 -0.264636 -0.266976 -0.090558  0.180317  0.602085  0.180538  0.432691  0.654024
+4     XLE  0.717516  0.689565  0.701784  0.664981  1.000000  0.633552  0.555928  0.500399  0.536625 -0.242694 -0.310525 -0.326858 -0.058706  0.092037  0.520934  0.124748  0.649373  0.532522
+5     XLF  0.835474  0.809668  0.760289  0.699336  0.633552  1.000000  0.666891  0.502891  0.628324 -0.271998 -0.328266 -0.331597 -0.142422  0.097719  0.565774 -0.038676  0.306506  0.790406
+6     XLK  0.910828  0.791302  0.773617  0.748941  0.555928  0.666891  1.000000  0.501612  0.651687 -0.189028 -0.241454 -0.246378 -0.091216  0.184698  0.580638  0.062417  0.314578  0.603632
+7     XLU  0.640361  0.544469  0.591983  0.530535  0.500399  0.502891  0.501612  1.000000  0.592049 -0.046903 -0.066680 -0.093679  0.027325  0.257702  0.497665  0.123032  0.240100  0.603117
+8     XLV  0.792590  0.697665  0.700837  0.599667  0.536625  0.628324  0.651687  0.592049  1.000000 -0.132614 -0.209704 -0.234155 -0.075809  0.158166  0.539966  0.032129  0.238319  0.575217
+9     SHY -0.226490 -0.195618 -0.182045 -0.211374 -0.242694 -0.271998 -0.189028 -0.046903 -0.132614  1.000000  0.761225  0.566547  0.589197  0.377651 -0.052180  0.228794 -0.139436 -0.127440
+10    IEF -0.294250 -0.275751 -0.260600 -0.264636 -0.310525 -0.328266 -0.241454 -0.066680 -0.209704  0.761225  1.000000  0.910755  0.761277  0.566131 -0.090186  0.222810 -0.207419 -0.150104
+11    TLT -0.306880 -0.287949 -0.286226 -0.266976 -0.326858 -0.331597 -0.246378 -0.093679 -0.234155  0.566547  0.910755  1.000000  0.701483  0.546050 -0.130872  0.168413 -0.236576 -0.157135
+12    TIP -0.102247 -0.088601 -0.065148 -0.090558 -0.058706 -0.142422 -0.091216  0.027325 -0.075809  0.589197  0.761277  0.701483  1.000000  0.536266  0.085620  0.271139  0.050254 -0.046672
+13    LQD  0.203139  0.169152  0.228285  0.180317  0.092037  0.097719  0.184698  0.257702  0.158166  0.377651  0.566131  0.546050  0.536266  1.000000  0.447705  0.160933  0.065714  0.184327
+14    HYG  0.681107  0.621931  0.659660  0.602085  0.520934  0.565774  0.580638  0.497665  0.539966 -0.052180 -0.090186 -0.130872  0.085620  0.447705  1.000000  0.047897  0.344644  0.526502
+15    GLD  0.061342  0.060379  0.162862  0.180538  0.124748 -0.038676  0.062417  0.123032  0.032129  0.228794  0.222810  0.168413  0.271139  0.160933  0.047897  1.000000  0.336928  0.055256
+16    DBC  0.394825  0.367935  0.436731  0.432691  0.649373  0.306506  0.314578  0.240100  0.238319 -0.139436 -0.207419 -0.236576  0.050254  0.065714  0.344644  0.336928  1.000000  0.267930
+17    VNQ  0.746235  0.763586  0.688571  0.654024  0.532522  0.790406  0.603632  0.603117  0.575217 -0.127440 -0.150104 -0.157135 -0.046672  0.184327  0.526502  0.055256  0.267930  1.000000
+```
+
+The CSVs hold 10 significant digits; `to_string()` shows 6 decimals.
+
+**Full test output** (`.venv\Scripts\python -m pytest --disable-socket -v`)
+
+```
+============================= test session starts =============================
+platform win32 -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0 -- C:\Utkarsh\10. Quant Projects\5) Constrained Portfolio Optimiser\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Utkarsh\10. Quant Projects\5) Constrained Portfolio Optimiser
+configfile: pyproject.toml
+testpaths: tests
+plugins: platformdirs-4.12.2, socket-0.8.1
+collecting ... collected 21 items
+
+tests/test_calendar.py::test_calendar_has_196_rows PASSED                [  4%]
+tests/test_calendar.py::test_first_decision_2010_04_30 PASSED            [  9%]
+tests/test_calendar.py::test_last_decision_2026_07_31 PASSED             [ 14%]
+tests/test_calendar.py::test_exec_date_is_next_trading_day PASSED        [ 19%]
+tests/test_calendar.py::test_decision_dates_are_trading_days PASSED      [ 23%]
+tests/test_config.py::test_config_keys_match_fields PASSED               [ 28%]
+tests/test_config.py::test_w_mkt_sums_to_one PASSED                      [ 33%]
+tests/test_config.py::test_one_way_bp_tickers PASSED                     [ 38%]
+tests/test_data.py::test_load_prices_shape_and_order PASSED              [ 42%]
+tests/test_data.py::test_load_prices_no_nan_from_panel_start PASSED      [ 47%]
+tests/test_data.py::test_panel_start_is_first_full_row PASSED            [ 52%]
+tests/test_data.py::test_rf_uses_previous_day_and_ffill PASSED           [ 57%]
+tests/test_data.py::test_validate_flags_each_issue_type PASSED           [ 61%]
+tests/test_data.py::test_data_summary_columns_and_rows PASSED            [ 66%]
+tests/test_data.py::test_data_summary_annualisation PASSED               [ 71%]
+tests/test_data.py::test_corr_full_sample_symmetric_unit_diagonal PASSED [ 76%]
+tests/test_manifest.py::test_manifest_hashes_match PASSED                [ 80%]
+tests/test_placeholder.py::test_placeholder PASSED                       [ 85%]
+tests/test_returns.py::test_compounded_daily_equals_holding_return PASSED [ 90%]
+tests/test_returns.py::test_rf_constant_5pct_gives_005_over_252 PASSED   [ 95%]
+tests/test_returns.py::test_monthly_excess_2020_03_manual PASSED         [100%]
+
+============================= 21 passed in 4.54s ==============================
+```
+
+**Fresh-clone check under amendment 3**
+
+Steps:
+
+1. Cloned `https://github.com/uty101/Constrained-Portfolio-Optimiser.git` at `0d9e5bc` into `%TEMP%\pcs1b`.
+2. `uv venv --seed --python 3.11 .venv`.
+3. `.venv\Scripts\python -m pip install -r requirements-lock.txt`.
+4. `.venv\Scripts\python -m pip install -e . --no-deps`.
+5. `.venv\Scripts\python -m pytest --disable-socket -q`.
+6. Deleted the folder afterwards.
+
+Amendment 3 is applied here even though its `CLAUDE.md` text is not yet committed (see step 1.0b e).
+
+```
+.....................                                                    [100%]
+21 passed in 7.45s
+```
+
+**requirements-lock.txt lines**
+
+```
+clarabel==0.11.1
+cvxpy==1.9.3
+numpy==2.4.6
+pandas==3.0.6
+pyportfolioopt==1.6.0
+pytest==9.1.1
+scikit-learn==1.9.1
+scipy==1.17.1
+yfinance==1.7.0
+```
+
+**git ls-files --eol**
+
+```
+i/lf    w/lf    attr/text=auto eol=lf 	PLAN.md
+i/none  w/none  attr/-text            	data/raw/.gitkeep
+i/lf    w/lf    attr/-text            	data/raw/MANIFEST.json
+i/lf    w/lf    attr/-text            	data/raw/prices_adjclose.csv
+i/lf    w/lf    attr/-text            	data/raw/rf_dgs3mo.csv
+i/none  w/none  attr/text=auto eol=lf 	outputs/tables/.gitkeep
+i/lf    w/lf    attr/text=auto eol=lf 	outputs/tables/corr_full_sample.csv
+i/lf    w/lf    attr/text=auto eol=lf 	outputs/tables/data_issues.csv
+i/lf    w/lf    attr/text=auto eol=lf 	outputs/tables/data_summary.csv
+```
+
 ## Tests run
 
 `.venv\Scripts\python -m pytest -p socket --disable-socket -v`
@@ -477,11 +639,22 @@ Appended to `decisions/OPEN.md`:
 
 Session 0 items 3b to 3e, 4, 5 and 6 are still unanswered. None of them affects Section 1.
 
+Session 1b: both items above are resolved in `decisions/section_1_review.md` (option 1 each), and the session 0 items in `decisions/section_0_review.md`. `decisions/OPEN.md` is empty. Open for the user, from tool-permission blocks:
+
+- the `CLAUDE.md` amendments, uncommitted on disk;
+- the 1.6 marker and the line-5 intro sentence in `PLAN.md`.
+
 ## Files changed
 
 Added: `.gitattributes`, `pc/config.py`, `pc/data.py`, `pc/calendar.py`, `pc/returns.py`, `scripts/pull_data.py`, `data/raw/prices_adjclose.csv`, `data/raw/rf_dgs3mo.csv`, `data/raw/MANIFEST.json`, `outputs/tables/data_issues.csv`, `tests/conftest.py`, `tests/test_config.py`, `tests/test_manifest.py`, `tests/test_data.py`, `tests/test_calendar.py`, `tests/test_returns.py`, `review/section_1.md`, `instructions/01_section_1.status.md`.
 Modified: `decisions/OPEN.md`.
 Deleted: none.
+
+Session 1b:
+
+- Added: `decisions/section_0_review.md`, `decisions/section_1_review.md`, `requirements-lock.txt`, `outputs/tables/data_summary.csv`, `outputs/tables/corr_full_sample.csv`, `instructions/01b_section_1_completion.status.md`.
+- Modified: `.gitattributes`, `PLAN.md`, `decisions/OPEN.md` (emptied), `docs/CONVENTIONS_RESOLVED.md`, `pc/data.py`, `tests/test_data.py`, `review/section_1.md`.
+- Modified on disk, not committed: `CLAUDE.md`.
 
 ## Reviewer reads
 
