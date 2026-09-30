@@ -141,3 +141,12 @@ Output schemas:
 - `outputs/figures/*.png`: matplotlib, 150 dpi, one chart per file.
 
 The source doc asked for one long DataFrame. Two tables keyed by (strategy_id, decision_date) replace it because per-asset and per-period fields do not share a grain. Record this in `docs/CONVENTIONS_RESOLVED.md`.
+
+---
+
+## Amendments
+
+1. **Instruction precedence.** An instruction file overrides `PLAN.md` and the kickoff where they differ. Decisions are written into `PLAN.md` when an instruction file says so.
+2. **Environment.** Python is not on PATH on this machine. Build `.venv` with `uv venv --seed --python 3.11 .venv`, then `.venv\Scripts\python -m pip install -r requirements-lock.txt` and `.venv\Scripts\python -m pip install -e . --no-deps`. A dependency that fails to install is a rule 4 stop.
+3. **Fresh-clone check (replaces the command in rule 12).** Clone into a short path (`%TEMP%\pcsN`, N the session number) because of the Windows 260-character path limit. Build `.venv` there as in amendment 2 and run `.venv\Scripts\python -m pytest --disable-socket -q`. `-p socket` is dropped because the plugin already loads from its entry point, and loading it twice caused the warning in session 1. Paste the full output, then delete the folder.
+4. **Status file naming.** A session whose instruction file is `instructions/NN_<name>.md` writes `instructions/NN_<name>.status.md`. `instructions/01_section_1.status.md` stays under its current name as the record of session 1.
