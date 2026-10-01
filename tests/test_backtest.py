@@ -6,9 +6,16 @@ import pytest
 
 import pc.backtest as backtest
 from pc.allocators import AllocResult
-from pc.backtest import build_registry, drift, run_walk_forward
+from pc.backtest import (
+    DateInputs,
+    build_registry,
+    constraint_sets,
+    drift,
+    monthly_total_returns,
+    run_walk_forward,
+)
 from pc.calendar import build_calendar
-from pc.returns import holding_returns
+from pc.returns import daily_returns, holding_returns, monthly_excess_returns
 
 REGISTRY_IDS = [
     "mv_unconstrained|sample|sample|A",
@@ -193,16 +200,47 @@ def test_no_look_ahead(real):
     later = base[base.decision_date > t].merge(wa[wa.decision_date > t], on=keys)
     assert (later.w_target_x != later.w_target_y).any()
 
-    # (b) prices after t: weights at t of the specs that do not use w_prev are unchanged.
-    wb, _ = run_walk_forward(specs, perturbed_prices(real.prices, t, cfg.run.seed_master), real.rf_daily, cfg6)
-    keep = [s for s in LOOK_AHEAD_SPECS if s not in USES_W_PREV]
-    # The instruction names 3 exclusions from 8 specs and calls the rest "the 6 specs"; 8 - 3 = 5.
+    # (b) prices after t: the information set at t is unchanged (decisions/section_4_review.md, 1).
+    # mu and Sigma at t, Black-Litterman's inputs and posterior, and the allocator output at t of
+    # the 5 specs that do not use w_prev, called with w_prev = None, are equal under ==.
+    def inputs_at_t(prices):
+        return DateInputs(t, daily_returns(prices), monthly_excess_returns(prices, real.rf_daily),
+                          monthly_total_returns(prices), cfg)
+
+    before = inputs_at_t(real.prices)
+    after = inputs_at_t(perturbed_prices(real.prices, t, cfg.run.seed_master))
+    assert not perturbed_prices(real.prices, t, cfg.run.seed_master).equals(real.prices)
+
+    def same(x, y):
+        assert x.equals(y)
+        assert np.array_equal(x.to_numpy(), y.to_numpy())
+
+    for est in cfg.cov.estimators:
+        same(before.sigma(est)[0], after.sigma(est)[0])
+        log_b, log_a = before.sigma(est)[1], after.sigma(est)[1]
+        assert log_b.keys() == log_a.keys()
+        assert all(np.array_equal([log_b[k]], [log_a[k]], equal_nan=True) for k in log_b), est
+    same(before.mu_sample, after.mu_sample)
+    same(before.mu_bayes_stein(), after.mu_bayes_stein())
+    same(before.pi("lw_cc"), after.pi("lw_cc"))
+    for x, y in zip(before.views(), after.views()):
+        same(x, y)
+    for x, y in zip(before.bl("lw_cc"), after.bl("lw_cc")):
+        same(x, y)
+
+    # The instruction's "6 specs" was a miscount: 8 - 3 = 5 (decisions/section_4_review.md, 1).
+    keep = [s for s in specs if s.id not in USES_W_PREV]
     assert len(keep) == 5
-    b = base[(base.decision_date == t) & base.strategy_id.isin(keep)]
-    a = wb[(wb.decision_date == t) & wb.strategy_id.isin(keep)]
-    assert len(b) == len(keep) * 18
-    assert b[keys].reset_index(drop=True).equals(a[keys].reset_index(drop=True))
-    assert np.array_equal(b.w_target.to_numpy(), a.w_target.to_numpy())
+    cons = constraint_sets(cfg)
+    for spec in keep:
+        outs = []
+        for inputs in (before, after):
+            mu, Sigma, _, _ = inputs.for_spec(spec)
+            outs.append(backtest.ALLOCATORS[spec.allocator](mu, Sigma, None, cons[spec.cons_set]))
+        x, y = outs
+        same(x.weights, y.weights)
+        assert (x.solver, x.status, x.fallback) == (y.solver, y.status, y.fallback)
+        assert np.array_equal([x.objective], [y.objective], equal_nan=True), spec.id
 
 
 def test_first_period_no_cost_no_turnover(real):
@@ -229,6 +267,10 @@ def test_first_period_no_cost_no_turnover(real):
     set_c = second[second.strategy_id.str.endswith("|C")]
     assert len(set_c) == 9 and set_c.tau_eff.notna().all()
     assert (set_c.turnover <= set_c.tau_eff + 1e-7).all()
+    # rp_max_rc_dev: max |pct RC - 1/N| on risk parity rows, NaN elsewhere.
+    is_rp = periods.strategy_id.str.startswith("risk_parity|")
+    assert periods.loc[is_rp, "rp_max_rc_dev"].between(0, 1e-6).all()
+    assert periods.loc[~is_rp, "rp_max_rc_dev"].isna().all()
 
 
 def test_ruin_rule_stops_wealth_path(cfg, monkeypatch):

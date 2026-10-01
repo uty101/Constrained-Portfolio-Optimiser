@@ -26,6 +26,7 @@ from pc.data import load_prices, load_rf_daily
 from pc.hrp import hrp
 from pc.returns import _month_end_closes, daily_returns, holding_returns, holding_rf, monthly_excess_returns
 from pc.returns_model import mu_bayes_stein, mu_sample
+from pc.risk import pct_risk_contributions
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ PERIOD_COLUMNS = [
     "strategy_id", "decision_date", "exec_date", "next_exec_date", "ret_gross", "cost", "ret_net",
     "rf_hold", "excess_net", "forecast_vol_ann", "mu_exante", "turnover", "n_positions",
     "gross_leverage", "solver", "status", "fallback", "turnover_dual", "tau_relaxed", "tau_eff",
-    "cond_before", "cond_after", "ridge", "ruined", "rp_converged",
+    "cond_before", "cond_after", "ridge", "ruined", "rp_converged", "rp_max_rc_dev",
 ]
 WEIGHT_COLUMNS = [
     "strategy_id", "decision_date", "exec_date", "ticker", "w_target", "w_prev_drifted", "trade", "cost_i",
@@ -120,6 +121,11 @@ def drift(w: pd.Series, r: pd.Series) -> pd.Series:
     return grown / total
 
 
+def rp_max_rc_dev(w: pd.Series, Sigma: pd.DataFrame) -> float:
+    """max_i |pct RC_i - 1/N| of the weights on the Sigma the allocator was given."""
+    return float((pct_risk_contributions(w, Sigma) - 1.0 / len(w)).abs().max())
+
+
 class DateInputs:
     """mu and Sigma at one decision date, each computed once and shared across strategies."""
 
@@ -144,16 +150,22 @@ class DateInputs:
             self._mu_bs = mu_bayes_stein(self.mu_sample, Sigma_lw, self.cfg.sample.window_months)[0]
         return self._mu_bs
 
+    def views(self) -> tuple[pd.DataFrame, pd.Series]:
+        """(P, Q) at t."""
+        if self._views is None:
+            self._views = momentum_views(self.monthly_total, self.monthly_excess, self.t, self.cfg)
+        return self._views
+
+    def pi(self, est: str) -> pd.Series:
+        """Pi = delta Sigma_cov w_mkt."""
+        w_mkt = pd.Series(self.cfg.bl.w_mkt)[list(self.cfg.universe.tickers)]
+        return implied_returns(self.sigma(est)[0], w_mkt, self.cfg.bl.delta)
+
     def bl(self, est: str) -> tuple[pd.Series, pd.DataFrame]:
         """(mu_BL, Sigma_BL): Pi = delta Sigma_cov w_mkt, the views at t, bl_posterior on Sigma_cov."""
         if est not in self._bl:
-            if self._views is None:
-                self._views = momentum_views(self.monthly_total, self.monthly_excess, self.t, self.cfg)
-            P, Q = self._views
-            Sigma = self.sigma(est)[0]
-            w_mkt = pd.Series(self.cfg.bl.w_mkt)[list(self.cfg.universe.tickers)]
-            Pi = implied_returns(Sigma, w_mkt, self.cfg.bl.delta)
-            self._bl[est] = bl_posterior(Sigma, Pi, P, Q, self.cfg.bl.tau)
+            P, Q = self.views()
+            self._bl[est] = bl_posterior(self.sigma(est)[0], self.pi(est), P, Q, self.cfg.bl.tau)
         return self._bl[est]
 
     def for_spec(self, spec: StrategySpec) -> tuple[pd.Series, pd.DataFrame, pd.DataFrame, dict]:
@@ -180,6 +192,7 @@ def _ruined_row(spec: StrategySpec, row) -> dict:
         "n_positions": nan, "gross_leverage": nan, "solver": "none", "status": "not_solved",
         "fallback": False, "turnover_dual": nan, "tau_relaxed": False, "tau_eff": nan,
         "cond_before": nan, "cond_after": nan, "ridge": nan, "ruined": True, "rp_converged": True,
+        "rp_max_rc_dev": nan,
     }
 
 
@@ -265,6 +278,7 @@ def walk_forward(
                 "tau_eff": float(res.tau_eff), "cond_before": log["cond_before"],
                 "cond_after": log["cond_after"], "ridge": log["ridge"], "ruined": bool(is_ruined),
                 "rp_converged": spec.allocator != "risk_parity" or res.status == "optimal",
+                "rp_max_rc_dev": rp_max_rc_dev(w, Sigma) if spec.allocator == "risk_parity" else math.nan,
             })
             weights.append(pd.DataFrame({
                 "strategy_id": spec.id, "decision_date": t, "exec_date": row.exec_date, "ticker": tickers,
