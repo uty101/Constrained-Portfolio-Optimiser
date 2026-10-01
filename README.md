@@ -160,7 +160,7 @@ uv venv --seed --python 3.11 .venv
 .venv\Scripts\python -m pytest --disable-socket -q
 ```
 
-On Linux or macOS, replace `.venv\Scripts\python` with `.venv/bin/python`. `run_all.py` regenerates every table, figure and result file from the committed snapshot in `data/raw/` without touching the network, prints the time each writer takes, and leaves `git status` clean. It takes about 10 minutes on a laptop, most of it in the sensitivity draws. The tests run offline as well. Only `scripts/pull_data.py` uses the network, and it is needed only to take a new snapshot.
+On Linux or macOS, replace `.venv\Scripts\python` with `.venv/bin/python`. `run_all.py` regenerates every table, figure and result file from the committed snapshot in `data/raw/` without touching the network, prints the time each writer takes, and leaves `git status` clean. It took about 6 minutes on the Windows laptop that built it, most of it in the sensitivity draws and the walk forward. The tests run offline as well. Only `scripts/pull_data.py` uses the network, and it is needed only to take a new snapshot.
 
 ## Limitations
 
