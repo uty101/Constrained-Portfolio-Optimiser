@@ -12,6 +12,7 @@ import math
 import sys
 import traceback
 from dataclasses import replace
+from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -38,6 +39,12 @@ DEFAULT_STRATEGY = "mv_constrained|lw_cc|sample|C"
 TRADES_CSV_KWARGS = dict(index=False, float_format="%.10g", lineterminator="\n")
 SET_A_MESSAGE = "set A is research only; it shorts and levers"
 
+# Step 6.5: the demo book, target weights of a $10,000,000 NAV at the 2026-07-31 closes; cash is
+# the rest of the NAV.
+DEMO_WEIGHTS = {"GLD": 0.40, "SPY": 0.20, "IEF": 0.20, "TLT": 0.10, "HYG": 0.05}
+DEMO_NAV = Decimal("10000000.00")
+DEMO_ASOF = "2026-07-31"
+DEMO_PRICE_DECIMALS = 4
 
 
 def repo_config() -> Config:
@@ -199,3 +206,21 @@ def main(argv: list[str] | None = None) -> int:
             traceback.print_exc()
         return 1
 
+
+# --- 6.5 demo book -------------------------------------------------------------------------------
+
+
+def demo_book(cfg: Config) -> tuple[pd.DataFrame, Decimal]:
+    """(positions, cash) of the step 6.5 demo book: price_i = the DEMO_ASOF close rounded to 4
+    decimals, quantity_i = floor(weight_i x NAV / price_i), cash = NAV - sum quantity x price,
+    exact in decimal so the NAV is exactly $10,000,000.00. Rows in config order."""
+    closes = load_prices(cfg).loc[pd.Timestamp(DEMO_ASOF)]
+    rows, held = [], Decimal(0)
+    for t in cfg.universe.tickers:
+        if t not in DEMO_WEIGHTS:
+            continue
+        price = Decimal(repr(round(float(closes[t]), DEMO_PRICE_DECIMALS)))
+        qty = int((Decimal(repr(DEMO_WEIGHTS[t])) * DEMO_NAV / price).to_integral_value(rounding=ROUND_FLOOR))
+        held += qty * price
+        rows.append((t, qty, float(price)))
+    return pd.DataFrame(rows, columns=POSITION_COLUMNS), DEMO_NAV - held

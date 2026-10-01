@@ -1,12 +1,15 @@
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from pc.cli import SET_A_MESSAGE, build_parser, main, plan, repo_config
+from pc.cli import SET_A_MESSAGE, TRADES_CSV_KWARGS, build_parser, demo_book, main, plan, repo_config
 from pc.data import load_prices
 
 ROOT = Path(__file__).resolve().parents[1]
+DEMO_POSITIONS = ROOT / "examples" / "positions_demo.csv"
+DEMO_TRADES = ROOT / "examples" / "trades_demo.csv"
 LAST = "2026-07-31"
 
 
@@ -148,3 +151,17 @@ def test_cash_is_fully_invested_by_budget(tmp_path, capsys):
     assert 0 <= s["residual_cash"] <= bound
     np.testing.assert_allclose(trades["price"].to_numpy(), closes[trades["ticker"]].to_numpy(), rtol=0, atol=0)
 
+
+def test_demo_reproduces_trades_demo(tmp_path, capsys):
+    cfg = repo_config()
+    positions, cash = demo_book(cfg)
+    # The committed book is the step 6.5 formula applied to the committed data.
+    rebuilt = tmp_path / "positions_demo.csv"
+    positions.to_csv(rebuilt, **TRADES_CSV_KWARGS)
+    assert rebuilt.read_bytes() == DEMO_POSITIONS.read_bytes()
+    assert str(cash) == "500790.0747"
+    out = tmp_path / "trades_demo.csv"
+    code, _, _ = run(["--positions", str(rebuilt), "--cash", str(cash), "--asof", LAST, "--out", str(out)], capsys)
+    assert code == 0
+    assert out.read_bytes() == DEMO_TRADES.read_bytes()
+    assert pd.read_csv(out)["ticker"].tolist() == pd.read_csv(DEMO_TRADES)["ticker"].tolist()
