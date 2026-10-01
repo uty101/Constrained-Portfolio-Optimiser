@@ -1199,7 +1199,7 @@ Session 4b:
 
 ## Not verified
 
-- Byte-identical parquet on a second run (rule 9 covers CSV outputs) was not checked.
+- Session 4: byte-identical parquet on a second run was not checked. Session 4b checked it: a second full run reproduced both parquet files, the 3 CSVs and the 2 PNGs by MD5 (`### Session 4b`).
 - The 23 `UserWarning: Solution may be inaccurate` lines in the test run come from CLARABEL statuses of `optimal_inaccurate`, which the policy retries with SCS. They were not investigated further.
 
 ## Open questions
