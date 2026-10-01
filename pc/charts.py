@@ -21,7 +21,7 @@ from pc.config import Config  # noqa: E402
 from pc.data import load_prices, load_rf_daily  # noqa: E402
 from pc.returns import holding_returns, holding_rf  # noqa: E402
 from pc.solver import solve, symmetrise  # noqa: E402
-from pc.stats import PRIMARY_IDS, SHARPE_DDOF  # noqa: E402
+from pc.stats import PRIMARY_IDS, SHARPE_DDOF, ruin_month  # noqa: E402
 
 DPI = 150  # kickoff Section 6: figures at 150 dpi
 MONTHS_PER_YEAR = 12
@@ -34,6 +34,17 @@ X_MAX = 0.30
 # Margin added above and below the y data range, as a fraction of that range (presentation only).
 Y_PAD = 0.05
 CHART2_IDS = ["mv_constrained|lw_cc|sample|C", "risk_parity|ewma|none|none"]
+# Instruction 05, step 5.0.b: a fixed label offset (dx, dy) in points per allocator, chosen so no
+# 2 labels overlap. A negative dx right-aligns the label so it sits left of its point.
+LABEL_OFFSETS = {
+    "mv_unconstrained": (5, 4),
+    "mv_constrained": (5, 6),
+    "min_variance": (6, -10),
+    "risk_parity": (8, 0),
+    "black_litterman": (5, -10),
+    "hrp": (5, 4),
+    "equal_weight": (-6, -10),
+}
 
 
 def holding_excess(prices: pd.DataFrame, rf_daily: pd.Series, cfg: Config) -> pd.DataFrame:
@@ -93,7 +104,8 @@ def frontier_set_b(mu: pd.Series, Sigma: pd.DataFrame, cfg: Config) -> pd.DataFr
 
 
 def strategy_points(periods: pd.DataFrame, ids: list[str]) -> pd.DataFrame:
-    """x = std(excess_net) sqrt(12), y = mean(excess_net) x 12, over the months with a return."""
+    """x = std(excess_net) sqrt(12), y = mean(excess_net) x 12, over the months with a return.
+    ruin_month is the month of the ruin decision date (NaN if never ruined)."""
     rows = []
     for sid in ids:
         p = periods[periods["strategy_id"] == sid]
@@ -104,6 +116,7 @@ def strategy_points(periods: pd.DataFrame, ids: list[str]) -> pd.DataFrame:
             "ann_vol": float(np.std(x, ddof=SHARPE_DDOF) * np.sqrt(MONTHS_PER_YEAR)),
             "ann_excess": float(x.mean() * MONTHS_PER_YEAR),
             "ruined": bool(p["ruined"].any()),
+            "ruin_month": ruin_month(p),
         })
     return pd.DataFrame(rows)
 
@@ -124,15 +137,41 @@ def outside_axes(points: pd.DataFrame, ylim: tuple[float, float]) -> pd.DataFram
 
 
 def outside_text(outside: pd.DataFrame) -> str:
+    """One line per point outside the axes. A ruined strategy shows its ruin month and wealth 0 in
+    place of its mean and vol (instruction 05, step 5.0.b)."""
     lines = ["Outside the axes (ann. vol, ann. excess return):"]
     for row in outside.itertuples():
-        flag = ", ruined" if row.ruined else ""
-        lines.append(f"{row.label} ({row.strategy_id}): {row.ann_vol:.1%}, {row.ann_excess:.1%}{flag}")
+        if row.ruined:
+            lines.append(f"{row.label} ({row.strategy_id}): ruined {row.ruin_month}, wealth 0")
+        else:
+            lines.append(f"{row.label} ({row.strategy_id}): {row.ann_vol:.1%}, {row.ann_excess:.1%}")
     return "\n".join(lines)
 
 
-def plot_frontier(front_a: pd.DataFrame, front_b: pd.DataFrame, points: pd.DataFrame, path: Path) -> str:
-    """Chart 1. Returns the text box contents ("" when every point is inside the axes)."""
+def label_offset(label: str) -> tuple[tuple[float, float], str]:
+    """(offset in points, horizontal alignment) for one allocator's label; a label that is not an
+    allocator (synthetic test points) takes the mv_unconstrained offset."""
+    dx, dy = LABEL_OFFSETS.get(label, LABEL_OFFSETS["mv_unconstrained"])
+    return (dx, dy), "right" if dx < 0 else "left"
+
+
+def overlapping_labels(boxes: dict[str, tuple[float, float, float, float]]) -> list[tuple[str, str]]:
+    """Pairs of labels whose rendered boxes (x0, y0, x1, y1, display units) intersect."""
+    names = list(boxes)
+    out = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            ax0, ay0, ax1, ay1 = boxes[a]
+            bx0, by0, bx1, by1 = boxes[b]
+            if ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1:
+                out.append((a, b))
+    return out
+
+
+def plot_frontier(front_a: pd.DataFrame, front_b: pd.DataFrame, points: pd.DataFrame, path: Path,
+                  boxes: dict | None = None) -> str:
+    """Chart 1. Returns the text box contents ("" when every point is inside the axes). When boxes
+    is a dict it is filled with each label's rendered box (x0, y0, x1, y1) in display units."""
     ylim = y_limits(front_a, front_b, points)
     fig, ax = plt.subplots(figsize=(9, 6))
     ax.plot(front_a["vol"], front_a["target_return"], color="#1f77b4", lw=1.6,
@@ -142,8 +181,11 @@ def plot_frontier(front_a: pd.DataFrame, front_b: pd.DataFrame, points: pd.DataF
     inside = points[points["ann_vol"].between(0, X_MAX) & points["ann_excess"].between(*ylim)]
     ax.scatter(inside["ann_vol"], inside["ann_excess"], color="black", zorder=3, s=22,
                label="Strategies, out-of-sample (net, excess)")
+    labels = {}
     for row in inside.itertuples():
-        ax.annotate(row.label, (row.ann_vol, row.ann_excess), xytext=(5, 4), textcoords="offset points", fontsize=8)
+        offset, ha = label_offset(row.label)
+        labels[row.label] = ax.annotate(row.label, (row.ann_vol, row.ann_excess), xytext=offset,
+                                        textcoords="offset points", ha=ha, fontsize=8)
     text = ""
     outside = outside_axes(points, ylim)
     if len(outside):
@@ -161,6 +203,10 @@ def plot_frontier(front_a: pd.DataFrame, front_b: pd.DataFrame, points: pd.DataF
     ax.legend(loc="upper left", fontsize=8)
     fig.tight_layout()
     fig.savefig(path, dpi=DPI)
+    if boxes is not None:
+        renderer = fig.canvas.get_renderer()
+        for name, ann in labels.items():
+            boxes[name] = tuple(ann.get_window_extent(renderer).extents)
     plt.close(fig)
     return text
 
@@ -195,8 +241,10 @@ def write_charts(cfg: Config) -> dict:
     periods = pd.read_parquet(results / "periods.parquet")
     points = strategy_points(periods, PRIMARY_IDS)
     figures = Path(cfg.outputs.figures_dir)
-    text = plot_frontier(front_a, front_b, points, figures / "frontier_vs_oos.png")
+    boxes = {}
+    text = plot_frontier(front_a, front_b, points, figures / "frontier_vs_oos.png", boxes)
     plot_weights_stacked(pd.read_parquet(results / "weights_long.parquet"), CHART2_IDS,
                          list(cfg.universe.tickers), figures / "weights_stacked.png")
-    return {"mu": mu, "front_a": front_a, "front_b": front_b, "points": points, "text_box": text,
-            "ylim": y_limits(front_a, front_b, points)}
+    return {"mu": mu, "Sigma": Sigma, "front_a": front_a, "front_b": front_b, "points": points,
+            "text_box": text, "ylim": y_limits(front_a, front_b, points), "label_boxes": boxes,
+            "label_overlaps": overlapping_labels(boxes)}

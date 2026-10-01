@@ -81,7 +81,7 @@ def test_metrics_on_synthetic_series():
     ex_mean = sum(ex) / 6
     ex_sd = math.sqrt(sum((x - ex_mean) ** 2 for x in ex) / 5)
     # Peak 1.02 * 0.99 * 1.03 after month 3, then -4%: the drawdown is exactly -0.04.
-    assert a.n_months == 6 and not a.ruined
+    assert a.n_months == 6 and not a.ruined and pd.isna(a.ruin_month)
     assert abs(a.ann_return - ann_return) <= 1e-15
     assert abs(a.ann_vol - sd * math.sqrt(12)) <= 1e-15
     assert abs(a.sharpe - ex_mean / ex_sd * math.sqrt(12)) <= 1e-12
@@ -110,8 +110,9 @@ def test_metrics_respect_ruin_truncation():
     assert m.max_dd == -1.0
     r = np.array([0.10, 0.05, -1.0])
     assert abs(m.ann_vol - np.std(r, ddof=1) * math.sqrt(12)) <= 1e-15
-    ex = r - 0.001
-    assert abs(m.sharpe - ex.mean() / np.std(ex, ddof=1) * math.sqrt(12)) <= 1e-12
+    # A ruined strategy has a NaN Sharpe and its ruin month (decisions/section_5_review.md, 2).
+    assert math.isnan(m.sharpe)
+    assert m.ruin_month == "2020-03"
     assert abs(m.mean_turnover - 0.4) <= 1e-15
     assert abs(m.mean_positions - 4.0) <= 1e-15
 
@@ -162,11 +163,11 @@ def test_sharpe_diff_against_self_is_zero(cfg):
         assert row[f"diff_vs_{b}"] == 0.0
         assert row[f"diff_p05_vs_{b}"] == 0.0 and row[f"diff_p95_vs_{b}"] == 0.0
         assert row[f"frac_le_0_vs_{b}"] == 1.0
-    # A ruined strategy gets NaN intervals (amendment 4.2.8).
+    # A ruined strategy gets a NaN point Sharpe and NaN intervals (amendment 4.2.8 and
+    # decisions/section_5_review.md, 2).
     assert out.loc["r"].ruined
-    assert out.loc["r", ["sharpe_p05", "sharpe_p95", "diff_vs_a", "diff_p05_vs_c", "frac_le_0_vs_c"]].isna().all()
-    x = np.array([0.01] * 59 + [-1.0])
-    assert abs(out.loc["r", "sharpe"] - x.mean() / x.std(ddof=1) * math.sqrt(12)) <= 1e-12
+    assert out.loc["r", ["sharpe", "sharpe_p05", "sharpe_p95", "diff_vs_a", "diff_p05_vs_c",
+                         "frac_le_0_vs_c"]].isna().all()
 
 
 def test_results_primary_rows_and_columns(cfg):

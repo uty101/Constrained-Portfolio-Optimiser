@@ -35,11 +35,11 @@ def stationary_bootstrap_indices(n: int, mean_block: float, reps: int, seed: int
 
 MONTHS_PER_YEAR = 12
 # Kickoff 5.8 gives ddof 1 for annualised vol and no ddof for the Sharpe std; the Sharpe ratio
-# uses ddof 1 too (decisions/OPEN.md, item 6, implemented as option 1).
+# uses ddof 1 too (decisions/section_5_review.md, 1: open decision 6, option 1).
 SHARPE_DDOF = 1
 
 METRIC_COLUMNS = [
-    "strategy_id", "n_months", "ruined", "ann_return", "ann_vol", "sharpe", "max_dd",
+    "strategy_id", "n_months", "ruined", "ruin_month", "ann_return", "ann_vol", "sharpe", "max_dd",
     "forecast_vol_ann", "fcst_realised_ratio", "mean_turnover", "mean_positions",
     "scs_retries", "fallbacks", "rp_not_converged", "ridged_months",
 ]
@@ -56,13 +56,20 @@ def max_drawdown(r_net: np.ndarray) -> float:
     return float(np.min(wealth / np.maximum.accumulate(wealth) - 1))
 
 
+def ruin_month(p: pd.DataFrame) -> str | float:
+    """The month (YYYY-MM) of the first ruined decision date of one strategy; NaN if never ruined."""
+    ruined = p.loc[p["ruined"].astype(bool), "decision_date"]
+    return pd.Timestamp(ruined.min()).strftime("%Y-%m") if len(ruined) else math.nan
+
+
 def strategy_metrics(periods: pd.DataFrame) -> pd.DataFrame:
     """One row per strategy, in order of first appearance in periods.
 
     The wealth path is every month with a ret_net, the ruin month included (amendment 4.2.8),
-    so a ruined strategy has wealth 0, ann_return -1 and max_dd -1. mean_turnover skips the
-    first period (NaN). scs_retries counts "SCS" in every solver string; fallbacks,
-    rp_not_converged and ridged_months (ridge > 0) count months.
+    so a ruined strategy has wealth 0, ann_return -1 and max_dd -1. A ruined strategy's
+    Sharpe is NaN (decisions/section_5_review.md, 2), and ruin_month is the month of its ruin
+    decision date. mean_turnover skips the first period (NaN). scs_retries counts "SCS" in
+    every solver string; fallbacks, rp_not_converged and ridged_months (ridge > 0) count months.
     """
     rows = []
     for sid, p in periods.groupby("strategy_id", sort=False):
@@ -71,13 +78,15 @@ def strategy_metrics(periods: pd.DataFrame) -> pd.DataFrame:
         n = len(r)
         ann_vol = float(np.std(r, ddof=1) * np.sqrt(MONTHS_PER_YEAR))
         fcst = float(live["forecast_vol_ann"].mean())
+        is_ruined = bool(p["ruined"].any())
         rows.append({
             "strategy_id": sid,
             "n_months": n,
-            "ruined": bool(p["ruined"].any()),
+            "ruined": is_ruined,
+            "ruin_month": ruin_month(p),
             "ann_return": float(np.prod(1 + r) ** (MONTHS_PER_YEAR / n) - 1),
             "ann_vol": ann_vol,
-            "sharpe": sharpe(live["excess_net"].to_numpy(dtype=float)),
+            "sharpe": math.nan if is_ruined else sharpe(live["excess_net"].to_numpy(dtype=float)),
             "max_dd": max_drawdown(r),
             "forecast_vol_ann": fcst,
             "fcst_realised_ratio": fcst / ann_vol,
@@ -135,9 +144,9 @@ def sharpe_intervals(periods: pd.DataFrame, idx: np.ndarray, benchmarks: list[st
     Every strategy is resampled on the same index paths idx (reps x n, n = months per
     strategy), so a difference is taken path by path. Percentiles are np.quantile at
     (p05, p95) = bootstrap.ci with numpy's default rule (decisions/section_2_review.md, 1).
-    frac_le_0 is the fraction of paths whose difference is <= 0. A ruined strategy keeps its
-    point Sharpe (over the months of its wealth path, as in strategy_metrics); its interval,
-    and every difference involving it, is NaN (amendment 4.2.8).
+    frac_le_0 is the fraction of paths whose difference is <= 0. A ruined strategy's point
+    Sharpe, interval and every difference involving it are NaN (amendment 4.2.8 and
+    decisions/section_5_review.md, 2).
     """
     ci = bootstrap_config().ci
     series, ruined = {}, {}
@@ -152,7 +161,7 @@ def sharpe_intervals(periods: pd.DataFrame, idx: np.ndarray, benchmarks: list[st
             raise ValueError(f"benchmark {b!r} is not in periods")
 
     boots = {sid: None if ruined[sid] else boot_sharpe(x, idx) for sid, x in series.items()}
-    point = {sid: sharpe(x[~np.isnan(x)]) for sid, x in series.items()}
+    point = {sid: math.nan if ruined[sid] else sharpe(x) for sid, x in series.items()}
     nan = math.nan
     rows = []
     for sid in series:
