@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from pc.backtest import walk_forward
 from pc.experiments import (
     ANSWER_COLUMNS,
     EW_ID,
@@ -12,8 +13,11 @@ from pc.experiments import (
     cost_runs,
     cost_sensitivity,
     frontier_max_sharpe,
+    levered_periods,
+    levered_variants,
     monthly_sample_cov,
     source_rows,
+    specs_for,
     turnover_frontier,
     turnover_runs,
 )
@@ -187,3 +191,50 @@ def test_frontier_max_sharpe(cfg):
         else:
             # Every mu < 0: no long-only portfolio has mu'y = 1, so the set B program is infeasible.
             assert np.isnan(b.max_sharpe) and b.status != "optimal"
+
+
+LEVERED_IDS = ["risk_parity|lw_cc|none|none", "min_variance|lw_cc|none|B", "hrp|lw_cc|none|none"]
+
+
+def test_levered_k1_equals_unlevered(cfg):
+    prices, rf_daily, pcfg = panel(cfg, n_decisions=8)
+    weights, periods, _ = walk_forward(specs_for(pcfg, [*LEVERED_IDS, EW_ID]), prices, rf_daily, pcfg)
+    lev = levered_periods(periods, weights, prices, rf_daily, pcfg, LEVERED_IDS, k_override=1.0)
+    for sid in LEVERED_IDS:
+        a = lev[lev["strategy_id"] == sid].reset_index(drop=True)
+        b = periods[periods["strategy_id"] == sid].reset_index(drop=True)
+        assert len(a) == len(b) == 8
+        assert (a["financing"] == 0).all()
+        assert np.abs(a["ret_net"] - b["ret_net"]).max() <= 1e-12, sid
+        np.testing.assert_allclose(a["cost"], b["cost"], rtol=0, atol=1e-12)
+        np.testing.assert_allclose(a["turnover"], b["turnover"], rtol=0, atol=1e-12)
+    # Without the override, k is equal weight's forecast vol over the strategy's, which levers up.
+    lev = levered_periods(periods, weights, prices, rf_daily, pcfg, LEVERED_IDS)
+    fvol = periods.set_index(["strategy_id", "decision_date"])["forecast_vol_ann"]
+    for sid in LEVERED_IDS:
+        a = lev[lev["strategy_id"] == sid]
+        expected = fvol.loc[EW_ID].to_numpy() / fvol.loc[sid].to_numpy()
+        np.testing.assert_array_equal(a["k"].to_numpy(), expected)
+
+
+def test_levered_zero_spread_cash_leg():
+    # Risky returns are 0 and costs are 0, so the fund earns only its cash leg, (1 - k) rf_hold.
+    # k and rf are dyadic, so (1 - k) rf and (1 + x) - 1 are exact and the check is ==.
+    tickers = ["X", "Y", "Z"]
+    dates = pd.DatetimeIndex(pd.date_range("2020-01-31", periods=6, freq="ME"), name="decision_date")
+    w = pd.DataFrame([[0.5, 0.25, 0.25]] * 6, index=dates, columns=tickers)
+    hold = pd.DataFrame(0.0, index=dates, columns=tickers)
+    k = pd.Series([0.5, 1.5, 0.75, 1.25, 2.0, 1.0], index=dates)
+    rf = pd.Series([2.0**-10, 2.0**-9, 3 * 2.0**-11, 2.0**-10, 2.0**-12, 2.0**-9], index=dates)
+    days = pd.Series(21, index=dates)
+    zero_cost = pd.Series(0.0, index=tickers)
+    out = levered_variants("s", w, k, hold, rf, days, zero_cost, 0.0, 21)
+    assert (out["financing"] == 0).all() and (out["cost"] == 0).all()
+    assert (out["ret_net"].to_numpy() == ((1 - k) * rf).to_numpy()).all()
+    assert (out["excess_net"].to_numpy() == (-k * rf).to_numpy()).all()
+    # With a spread, financing is charged on the borrowed part only: max(k - 1, 0) spread n / (12 x 21).
+    spread = 0.005
+    out = levered_variants("s", w, k, hold, rf, days, zero_cost, spread, 21)
+    expected = np.maximum(k.to_numpy() - 1, 0) * spread * 21 / (12 * 21)
+    np.testing.assert_allclose(out["financing"].to_numpy(), expected, rtol=1e-15, atol=0)
+    assert (out.loc[k.to_numpy() <= 1, "financing"] == 0).all()

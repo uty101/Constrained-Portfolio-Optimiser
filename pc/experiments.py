@@ -20,6 +20,7 @@ from pc.backtest import (  # noqa: E402
     MONTHS_PER_YEAR,
     DateInputs,
     build_registry,
+    cost_vector,
     walk_forward,
 )
 from pc.calendar import build_calendar  # noqa: E402
@@ -27,14 +28,16 @@ from pc.charts import frontier_inputs, holding_excess  # noqa: E402
 from pc.config import Config  # noqa: E402
 from pc.cov import condition_cov, estimate_cov  # noqa: E402
 from pc.data import load_prices, load_rf_daily  # noqa: E402
-from pc.returns import daily_returns, monthly_excess_returns  # noqa: E402
+from pc.returns import daily_returns, holding_returns, holding_rf, monthly_excess_returns  # noqa: E402
 from pc.returns_model import trailing_months  # noqa: E402
 from pc.sensitivity import MU_STRATEGIES  # noqa: E402
 from pc.solver import solve, symmetrise  # noqa: E402
 from pc.stats import (  # noqa: E402
     CSV_KWARGS,
     PRIMARY_IDS,
+    max_drawdown,
     sharpe_intervals,
+    stationary_bootstrap_indices,
     strategy_metrics,
 )
 
@@ -458,3 +461,122 @@ def write_answers(cfg: Config) -> tuple[list[Path], pd.DataFrame]:
     table = answers(read_tables(tables, ANSWER_SOURCES), cfg)
     table.to_csv(paths[1], **CSV_KWARGS)
     return paths, table
+
+# --- 5.6 levered risk-based funds ------------------------------------------------------------
+
+LEVERED_PERIOD_COLUMNS = ["strategy_id", "decision_date", "k", "ret_gross", "financing", "cost", "turnover",
+                          "ret_net", "rf_hold", "excess_net", "ruined"]
+LEVERED_COLUMNS = ["strategy_id", "mean_k", "max_k", "ann_return", "ann_vol", "sharpe", "sharpe_p05", "sharpe_p95",
+                   "diff_vs_ew", "diff_p05", "diff_p95", "frac_le_0", "max_dd"]
+
+
+def levered_k(periods: pd.DataFrame, sid: str) -> pd.Series:
+    """k_t = forecast_vol_ann(equal weight) / forecast_vol_ann(sid) by decision date, both from the
+    walk-forward periods (both on Sigma_lw_cc for the configured strategies). No cap."""
+    def fvol(s):
+        return periods.loc[periods["strategy_id"] == s].set_index("decision_date")["forecast_vol_ann"]
+
+    return (fvol(EW_ID) / fvol(sid)).rename("k")
+
+
+def levered_variants(sid: str, w: pd.DataFrame, k: pd.Series, hold: pd.DataFrame, rf_hold: pd.Series,
+                     n_hold_days: pd.Series, cost: pd.Series, spread: float, days_per_month: int) -> pd.DataFrame:
+    """The levered path of one strategy (instruction 05, step 5.6). Every input is indexed by decision
+    date; w and hold have the tickers as columns, in the order of cost.
+
+    Target holdings are k_t w_t in the risky assets and 1 - k_t in cash. w_prev is the previous
+    risky holdings drifted by the asset returns and the previous cash by rf_hold, divided by
+    their sum; turnover and cost use the risky weights only. With
+    gross = k_t w_t'r + (1 - k_t) rf_hold - max(k_t - 1, 0) spread n_hold_days / (12 days_per_month),
+    net = (1 - cost)(1 + gross) - 1, the kickoff 4.6 convention (decisions/OPEN.md, item 10).
+    First period: cost 0, turnover NaN. Ruin rule as in the engine (amendment 4.2.8).
+    """
+    nan = math.nan
+    rows, prev, ruined = [], None, False
+    for t in w.index:
+        if ruined:
+            rows.append({"strategy_id": sid, "decision_date": t, "k": float(k[t]), "ret_gross": nan,
+                         "financing": nan, "cost": nan, "turnover": nan, "ret_net": nan, "rf_hold": nan,
+                         "excess_net": nan, "ruined": True})
+            continue
+        kt = float(k[t])
+        wt = w.loc[t]
+        risky, cash = kt * wt, 1.0 - kt
+        r, rf = hold.loc[t], float(rf_hold[t])
+        if prev is None:
+            turnover, c = nan, 0.0
+        else:
+            risky_prev, cash_prev, r_prev, rf_prev = prev
+            grown = risky_prev * (1 + r_prev)
+            total = float(grown.sum()) + cash_prev * (1 + rf_prev)
+            if not total > 0:
+                raise ValueError(f"{sid} at {t}: drift denominator {total} <= 0")
+            trade = risky - grown / total
+            turnover, c = float(trade.abs().sum()), float((cost * trade.abs()).sum())
+        financing = max(kt - 1.0, 0.0) * spread * float(n_hold_days[t]) / (MONTHS_PER_YEAR * days_per_month)
+        gross = kt * float(wt @ r) + (1.0 - kt) * rf - financing
+        net = (1 - c) * (1 + gross) - 1
+        ruined = net <= -1
+        if ruined:
+            net = -1.0
+        rows.append({"strategy_id": sid, "decision_date": t, "k": kt, "ret_gross": gross, "financing": financing,
+                     "cost": c, "turnover": turnover, "ret_net": net, "rf_hold": rf, "excess_net": net - rf,
+                     "ruined": bool(ruined)})
+        prev = (risky, cash, r, rf)
+    return pd.DataFrame(rows, columns=LEVERED_PERIOD_COLUMNS)
+
+
+def levered_periods(periods: pd.DataFrame, weights_long: pd.DataFrame, prices: pd.DataFrame, rf_daily: pd.Series,
+                    cfg: Config, ids: list[str], k_override: float | None = None) -> pd.DataFrame:
+    """levered_variants for each strategy in ids, with k from levered_k, or k_override in every month."""
+    tickers = list(cfg.universe.tickers)
+    cal = build_calendar(prices.index, cfg)
+    hold = holding_returns(prices, cal)
+    rf_h = holding_rf(rf_daily, cal)
+    n_days = cal.set_index("decision_date")["n_hold_days"]
+    cost = cost_vector(cfg)
+    spread = cfg.levered.financing_spread_bp_pa / BP_PER_UNIT
+    frames = []
+    for sid in ids:
+        w = weights_long[weights_long["strategy_id"] == sid].pivot(
+            index="decision_date", columns="ticker", values="w_target")[tickers]
+        if len(w) != len(cal):
+            raise ValueError(f"{sid}: {len(w)} target months, the calendar has {len(cal)}")
+        k = levered_k(periods, sid) if k_override is None else pd.Series(float(k_override), index=w.index)
+        frames.append(levered_variants(sid, w, k, hold, rf_h, n_days, cost, spread, cfg.sample.days_per_month))
+    return pd.concat(frames, ignore_index=True)
+
+
+def levered_table(lev: pd.DataFrame, idx: np.ndarray, ids: list[str]) -> pd.DataFrame:
+    """One row per strategy in ids. Sharpe, its interval and the paired difference against equal weight
+    come from sharpe_intervals on the index paths idx (NaN for a ruined path)."""
+    iv = sharpe_intervals(lev, idx, [EW_ID]).set_index("strategy_id")
+    rows = []
+    for sid in ids:
+        p = lev[lev["strategy_id"] == sid]
+        r = p["ret_net"].dropna().to_numpy(dtype=float)
+        i = iv.loc[sid]
+        rows.append({
+            "strategy_id": sid, "mean_k": float(p["k"].mean()), "max_k": float(p["k"].max()),
+            "ann_return": ann_return(r), "ann_vol": float(np.std(r, ddof=1) * np.sqrt(MONTHS_PER_YEAR)),
+            "sharpe": i["sharpe"], "sharpe_p05": i["sharpe_p05"], "sharpe_p95": i["sharpe_p95"],
+            "diff_vs_ew": i[f"diff_vs_{EW_ID}"], "diff_p05": i[f"diff_p05_vs_{EW_ID}"],
+            "diff_p95": i[f"diff_p95_vs_{EW_ID}"], "frac_le_0": i[f"frac_le_0_vs_{EW_ID}"],
+            "max_dd": max_drawdown(r),
+        })
+    return pd.DataFrame(rows, columns=LEVERED_COLUMNS)
+
+
+def write_levered(cfg: Config) -> tuple[Path, pd.DataFrame]:
+    prices, rf_daily = load_panel(cfg)
+    results = Path(cfg.outputs.results_dir)
+    periods = pd.read_parquet(results / "periods.parquet")
+    weights_long = pd.read_parquet(results / "weights_long.parquet")
+    ids = [*cfg.levered.strategies, EW_ID]
+    lev = levered_periods(periods, weights_long, prices, rf_daily, cfg, ids)
+    b = cfg.bootstrap
+    n = lev.groupby("strategy_id").size().iloc[0]
+    idx = stationary_bootstrap_indices(int(n), b.mean_block, b.reps, cfg.run.bootstrap_seed)
+    path = Path(cfg.outputs.tables_dir) / "levered_risk_based.csv"
+    levered_table(lev, idx, ids).to_csv(path, **CSV_KWARGS)
+    return path, lev

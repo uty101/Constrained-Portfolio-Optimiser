@@ -20,3 +20,9 @@ In `turnover_frontier.csv` every τ from 0.05 to 0.75 lies above the line. τ = 
 
 - Option 1 (implemented): the literal comparison, `exante_return_given_up_bp_pa < cost_saved_bp_pa`. The answer is τ = 1.00.
 - Option 2: a τ with `n_binding = 0` lies on the line, not below it. No τ qualifies and the answer is NaN, meaning no limit in the grid was worth it ex ante.
+## 10. Step 5.6: the levered net return formula against `test_levered_k1_equals_unlevered` (implemented as option 1, needs confirming)
+
+Step 5.6 writes net = k·(w′r) + (1 − k)·rf − max(k − 1, 0)·spread·n/(12 × 21) − cost, with cost subtracted. The engine's net, kickoff 4.6, is (1 − cost)(1 + gross) − 1. At k = 1 the two differ by cost × w′r, up to 6.4e-5 a month on the real data, so the fixed test "forcing k = 1 reproduces the strategy's `ret_net` to 1e-12" can only pass with the kickoff form. The choice moves each levered Sharpe by at most 2.3e-5 (`review/section_5.md`, step 5.6).
+
+- Option 1 (implemented): gross = k·(w′r) + (1 − k)·rf − financing, and net = (1 − cost)(1 + gross) − 1, the kickoff 4.6 convention. Both 5.6 tests pass.
+- Option 2: net = gross − cost, as written in step 5.6. `test_levered_k1_equals_unlevered` would then fail at 1e-12, and would need its tolerance or its reference changed by the reviewer (rule 5).

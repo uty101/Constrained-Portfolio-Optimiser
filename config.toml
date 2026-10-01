@@ -146,6 +146,10 @@ include_none = true
 [positions]
 threshold = 0.005
 
+[levered]
+strategies = ["risk_parity|lw_cc|none|none", "min_variance|lw_cc|none|B", "hrp|lw_cc|none|none"]
+financing_spread_bp_pa = 50
+
 [cli]
 default_lot_size = 1
 default_min_notional = 1000.0

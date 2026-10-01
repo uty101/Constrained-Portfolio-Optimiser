@@ -122,6 +122,12 @@ class PositionsConfig:
 
 
 @dataclass(frozen=True)
+class LeveredConfig:
+    strategies: tuple[str, ...]
+    financing_spread_bp_pa: float
+
+
+@dataclass(frozen=True)
 class CliConfig:
     default_lot_size: int
     default_min_notional: float
@@ -151,6 +157,7 @@ class Config:
     sensitivity: SensitivityConfig
     turnover_grid: TurnoverGridConfig
     positions: PositionsConfig
+    levered: LeveredConfig
     cli: CliConfig
     outputs: OutputsConfig
 
@@ -193,6 +200,7 @@ def load_config(path: str | Path = "config.toml") -> Config:
         sensitivity=SensitivityConfig(**_tuples(raw["sensitivity"])),
         turnover_grid=TurnoverGridConfig(**_tuples(raw["turnover_grid"])),
         positions=PositionsConfig(**raw["positions"]),
+        levered=LeveredConfig(**_tuples(raw["levered"])),
         cli=CliConfig(**raw["cli"]),
         outputs=OutputsConfig(**raw["outputs"]),
     )
