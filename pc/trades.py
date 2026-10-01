@@ -192,3 +192,55 @@ def generate_trades(positions: pd.DataFrame, cash: float, target_w: pd.Series, c
         "w_after": w_after,
     }
     return trades, summary
+
+
+# --- 6.2 printed summary ------------------------------------------------------------------------
+
+
+def price_warnings(positions: pd.DataFrame, closes: pd.Series, warn_pct: float, asof: pd.Timestamp) -> list[str]:
+    """One line per positions price differing from the panel close on the decision date by more
+    than warn_pct (relative to the close), in file order (amendment 6.2)."""
+    lines = []
+    for row in positions.itertuples(index=False):
+        close = float(closes[row.ticker])
+        diff = row.price / close - 1
+        if abs(diff) > warn_pct:
+            lines.append(f"WARNING: {row.ticker} price {row.price:.4f} differs from the {asof:%Y-%m-%d} close "
+                         f"{close:.4f} by {diff:+.2%} (limit {warn_pct:.0%})")
+    return lines
+
+
+def format_summary(summary: dict, res, strategy_id: str, asof: pd.Timestamp, tau: float | None,
+                   warnings: list[str]) -> str:
+    """The printed summary (PLAN 6.2, amendment 6.2). res is the AllocResult; tau is the turnover
+    limit given to the allocator, None when it has none."""
+    nav = summary["nav"]
+    if tau is None:
+        limit = "turnover limit: none"
+    elif res.tau_relaxed:
+        limit = (f"turnover limit: {tau:g}, relaxed (tau_relaxed True): tau_min > tau, "
+                 f"tau_eff = {res.tau_eff:.10g}")
+    else:
+        limit = f"turnover limit: {tau:g}, not relaxed"
+    dual = res.turnover_dual
+    shadow = ("n/a" if tau is None or math.isnan(dual)
+              else f"{dual * BP_PER_PCT:.6g} bp of monthly return per 1% of turnover")
+    lines = [
+        f"strategy: {strategy_id}",
+        f"decision date: {asof:%Y-%m-%d} (allocator inputs from the pinned data snapshot)",
+        f"solver: {res.solver}  status: {res.status}  fallback: {res.fallback}",
+        limit,
+        f"turnover shadow price: {shadow}",
+        f"NAV: {nav:,.2f}",
+        f"cash before: {summary['cash_before']:,.2f} ({summary['cash_before'] / nav:.4%} of NAV)",
+        f"trades: {summary['n_trades']}  buys {summary['buy_notional']:,.2f}  sells {summary['sell_notional']:,.2f}",
+        f"turnover before rounding: {summary['turnover_before_rounding']:.6f}",
+        f"turnover after rounding: {summary['turnover_after_rounding']:.6f}",
+        f"total estimated cost: {summary['total_est_cost']:,.2f} ({summary['total_est_cost_bp']:.4f} bp of NAV)",
+        f"residual cash: {summary['residual_cash']:,.2f} ({summary['residual_cash_pct']:.4%} of NAV)",
+        f"max |weight_after - weight_target|: {summary['max_abs_weight_dev']:.6g}",
+        f"lots cut to keep cash >= 0: {summary['lots_cut_for_cash']}",
+    ]
+    if summary["residual_cash"] < 0:
+        lines.append("WARNING: residual cash is negative and no buy is left to cut")
+    return "\n".join([*lines, *warnings])
