@@ -3,7 +3,13 @@ import math
 import numpy as np
 import pandas as pd
 
-from pc.stats import sharpe_intervals, stationary_bootstrap_indices, strategy_metrics
+from pc.stats import (
+    PRIMARY_IDS,
+    results_primary,
+    sharpe_intervals,
+    stationary_bootstrap_indices,
+    strategy_metrics,
+)
 
 
 def test_bootstrap_indices_shape_and_determinism(cfg):
@@ -161,3 +167,38 @@ def test_sharpe_diff_against_self_is_zero(cfg):
     assert out.loc["r", ["sharpe_p05", "sharpe_p95", "diff_vs_a", "diff_p05_vs_c", "frac_le_0_vs_c"]].isna().all()
     x = np.array([0.01] * 59 + [-1.0])
     assert abs(out.loc["r", "sharpe"] - x.mean() / x.std(ddof=1) * math.sqrt(12)) <= 1e-12
+
+
+def test_results_primary_rows_and_columns(cfg):
+    rng = np.random.default_rng(cfg.run.seed_master)
+    n = 48
+    ids = list(reversed(PRIMARY_IDS)) + ["hrp|ewma|none|none"]  # input order differs from the table's
+    p = pd.concat([synthetic_periods(s, rng.normal(0.005, 0.02, n)) for s in ids], ignore_index=True)
+    metrics = strategy_metrics(p)
+    idx = stationary_bootstrap_indices(n, cfg.bootstrap.mean_block, 200, cfg.run.bootstrap_seed)
+    intervals = sharpe_intervals(p, idx, ["equal_weight|none|none|none"])
+    out = results_primary(metrics, intervals)
+    assert list(out.columns) == [
+        "strategy_id", "allocator", "covariance", "ruined", "ann_return", "ann_vol", "sharpe", "sharpe_p05",
+        "sharpe_p95", "forecast_vol_ann", "realised_vol_ann", "fcst_realised_ratio", "mean_turnover", "max_dd",
+        "mean_positions", "fallbacks", "ridged_months",
+    ]
+    assert out["strategy_id"].tolist() == [
+        "mv_unconstrained|sample|sample|A",
+        "mv_constrained|lw_cc|sample|C",
+        "min_variance|lw_cc|none|B",
+        "risk_parity|ewma|none|none",
+        "black_litterman|lw_cc|bl|C",
+        "hrp|sample|none|none",
+        "equal_weight|none|none|none",
+    ]
+    assert out["allocator"].tolist() == [s.split("|")[0] for s in out["strategy_id"]]
+    assert out["covariance"].tolist() == ["sample", "lw_cc", "lw_cc", "ewma", "lw_cc", "sample", "none"]
+    m = metrics.set_index("strategy_id").loc[out["strategy_id"]]
+    i = intervals.set_index("strategy_id").loc[out["strategy_id"]]
+    for col in ("ann_return", "ann_vol", "sharpe", "forecast_vol_ann", "mean_turnover", "max_dd", "mean_positions"):
+        assert np.array_equal(out[col].to_numpy(), m[col].to_numpy()), col
+    assert np.array_equal(out["sharpe_p05"].to_numpy(), i["sharpe_p05"].to_numpy())
+    assert np.array_equal(out["realised_vol_ann"].to_numpy(), m["ann_vol"].to_numpy())
+    np.testing.assert_allclose(out["fcst_realised_ratio"], out["forecast_vol_ann"] / out["realised_vol_ann"],
+                               rtol=1e-15, atol=0)

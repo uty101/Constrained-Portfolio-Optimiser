@@ -182,3 +182,50 @@ def write_sharpe_intervals(cfg: Config) -> Path:
     path = Path(cfg.outputs.tables_dir) / "sharpe_intervals.csv"
     sharpe_intervals(periods, idx, BENCHMARKS).to_csv(path, **CSV_KWARGS)
     return path
+
+
+# --- primary table (PLAN 4.5, instruction 04 amendment 4.5) -------------------------------
+
+# Kickoff 5.7: the primary table rows, fixed by the source doc, in this order.
+PRIMARY_IDS = [
+    "mv_unconstrained|sample|sample|A",
+    "mv_constrained|lw_cc|sample|C",
+    "min_variance|lw_cc|none|B",
+    "risk_parity|ewma|none|none",
+    "black_litterman|lw_cc|bl|C",
+    "hrp|sample|none|none",
+    "equal_weight|none|none|none",
+]
+PRIMARY_COLUMNS = [
+    "strategy_id", "allocator", "covariance", "ruined", "ann_return", "ann_vol", "sharpe", "sharpe_p05",
+    "sharpe_p95", "forecast_vol_ann", "realised_vol_ann", "fcst_realised_ratio", "mean_turnover", "max_dd",
+    "mean_positions", "fallbacks", "ridged_months",
+]
+
+
+def results_primary(metrics: pd.DataFrame, intervals: pd.DataFrame) -> pd.DataFrame:
+    """The 7 primary rows from metrics_all and sharpe_intervals.
+
+    ann_vol and realised_vol_ann are the same quantity, std(r_net, ddof 1) sqrt(12); both are
+    kept so fcst_realised_ratio = forecast_vol_ann / realised_vol_ann reads from its parts.
+    """
+    m = metrics.set_index("strategy_id")
+    i = intervals.set_index("strategy_id")
+    missing = [s for s in PRIMARY_IDS if s not in m.index or s not in i.index]
+    if missing:
+        raise ValueError(f"primary strategies missing: {missing}")
+    out = m.loc[PRIMARY_IDS].reset_index()
+    parts = out["strategy_id"].str.split("|", expand=True)
+    out["allocator"], out["covariance"] = parts[0], parts[1]
+    out["realised_vol_ann"] = out["ann_vol"]
+    for col in ("sharpe_p05", "sharpe_p95"):
+        out[col] = i.loc[PRIMARY_IDS, col].to_numpy()
+    return out[PRIMARY_COLUMNS]
+
+
+def write_results_primary(cfg: Config) -> Path:
+    tables = Path(cfg.outputs.tables_dir)
+    table = results_primary(pd.read_csv(tables / "metrics_all.csv"), pd.read_csv(tables / "sharpe_intervals.csv"))
+    path = tables / "results_primary.csv"
+    table.to_csv(path, **CSV_KWARGS)
+    return path
