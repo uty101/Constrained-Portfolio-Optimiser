@@ -21,7 +21,11 @@ from pc.backtest import (  # noqa: E402
 )
 from pc.config import Config  # noqa: E402
 from pc.data import load_prices, load_rf_daily  # noqa: E402
-from pc.stats import CSV_KWARGS  # noqa: E402
+from pc.stats import (  # noqa: E402
+    CSV_KWARGS,
+    PRIMARY_IDS,
+    strategy_metrics,
+)
 
 DPI = 150  # kickoff Section 6: figures at 150 dpi
 # bp of monthly return per 1% of turnover = dual x 1e4 bp x 0.01 = dual x 100 (kickoff 5.3, allocator 2).
@@ -174,3 +178,55 @@ def write_turnover_frontier(cfg: Config) -> tuple[list[Path], dict, dict]:
     table.to_csv(paths[0], **CSV_KWARGS)
     plot_turnover_frontier(table, paths[1])
     return paths, runs, seconds
+
+
+# --- 5.3 cost sensitivity --------------------------------------------------------------------
+
+COST_COLUMNS = ["strategy_id", "cost_scale", "ruined", "ann_return", "ann_vol", "sharpe", "mean_turnover",
+                "mean_cost_bp_pa"]
+
+
+def scale_costs(cfg: Config, scale: float) -> Config:
+    """cfg with every one-way cost multiplied by scale. The engine reads costs.one_way_bp for both the
+    set C cost term and the cost charged, so the scale applies to both (amendment 5.3)."""
+    return replace(cfg, costs=replace(cfg.costs, one_way_bp={t: bp * scale for t, bp in cfg.costs.one_way_bp.items()}))
+
+
+def cost_runs(prices: pd.DataFrame, rf_daily: pd.Series, cfg: Config, ids: list[str]) -> tuple[dict, dict]:
+    """(periods by cost scale, wall seconds by cost scale) for the strategies ids."""
+    specs = specs_for(cfg, ids)
+    runs, seconds = {}, {}
+    for scale in cfg.costs.cost_scales:
+        start = time.perf_counter()
+        _, runs[scale], _ = walk_forward(specs, prices, rf_daily, scale_costs(cfg, scale))
+        seconds[scale] = time.perf_counter() - start
+    return runs, seconds
+
+
+def cost_sensitivity(runs: dict, ids: list[str]) -> pd.DataFrame:
+    """One row per strategy and cost scale, strategies in the order of ids.
+
+    ann_return, ann_vol, sharpe, ruined and mean_turnover are strategy_metrics' (a ruined strategy
+    has a NaN Sharpe; decisions/section_5_review.md, 2). mean_cost_bp_pa = mean monthly cost over
+    the wealth path without its first period, x 12 x 1e4.
+    """
+    rows = []
+    for sid in ids:
+        for scale, periods in runs.items():
+            p = periods[periods["strategy_id"] == sid]
+            m = strategy_metrics(p).iloc[0]
+            live = after_first(p[p["ret_net"].notna()])
+            rows.append({
+                "strategy_id": sid, "cost_scale": scale, "ruined": bool(m.ruined), "ann_return": m.ann_return,
+                "ann_vol": m.ann_vol, "sharpe": m.sharpe, "mean_turnover": m.mean_turnover,
+                "mean_cost_bp_pa": bp_pa(live["cost"].mean()),
+            })
+    return pd.DataFrame(rows, columns=COST_COLUMNS)
+
+
+def write_cost_sensitivity(cfg: Config) -> tuple[Path, dict, dict]:
+    prices, rf_daily = load_panel(cfg)
+    runs, seconds = cost_runs(prices, rf_daily, cfg, PRIMARY_IDS)
+    path = Path(cfg.outputs.tables_dir) / "cost_sensitivity.csv"
+    cost_sensitivity(runs, PRIMARY_IDS).to_csv(path, **CSV_KWARGS)
+    return path, runs, seconds

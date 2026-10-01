@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 
 from pc.experiments import (
+    cost_runs,
+    cost_sensitivity,
     turnover_frontier,
     turnover_runs,
 )
@@ -56,3 +58,21 @@ def test_turnover_frontier_monotone_turnover(cfg):
     none = table.set_index("tau").loc["none"]
     assert none.exante_return_given_up_bp_pa == 0 and none.cost_saved_bp_pa == 0
     assert none.realised_net_vs_none_bp_pa == 0 and none.n_binding == 0
+
+
+def test_zero_cost_scale_net_equals_gross(cfg):
+    prices, rf_daily, pcfg = panel(cfg, n_decisions=6)
+    ids = ["mv_constrained|lw_cc|sample|C", "min_variance|lw_cc|none|B", "equal_weight|none|none|none"]
+    runs, _ = cost_runs(prices, rf_daily, pcfg, ids)
+    assert list(runs) == list(cfg.costs.cost_scales)
+    zero = runs[0.0]
+    assert (zero["cost"] == 0).all()
+    # (1 - 0)(1 + g) - 1 is g up to the rounding of (1 + g) - 1 (the step 4.2 first-period tolerance).
+    assert (zero["ret_net"] - zero["ret_gross"]).abs().max() <= 1e-15
+    table = cost_sensitivity(runs, ids)
+    assert (table.loc[table["cost_scale"] == 0.0, "mean_cost_bp_pa"] == 0).all()
+    # The scale reaches the charge: equal weight trades the same at every scale, so its cost scales.
+    ew = {s: p[p["strategy_id"] == "equal_weight|none|none|none"] for s, p in runs.items()}
+    np.testing.assert_array_equal(ew[1.0]["turnover"].to_numpy(), ew[3.0]["turnover"].to_numpy())
+    np.testing.assert_allclose(ew[3.0]["cost"].to_numpy(), 3 * ew[1.0]["cost"].to_numpy(), rtol=1e-14, atol=0)
+    assert (ew[1.0]["cost"].iloc[1:] > 0).all()
