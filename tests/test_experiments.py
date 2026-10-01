@@ -2,10 +2,13 @@ from dataclasses import replace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from pc.experiments import (
+    MonthlySampleInputs,
     cost_runs,
     cost_sensitivity,
+    monthly_sample_cov,
     turnover_frontier,
     turnover_runs,
 )
@@ -76,3 +79,25 @@ def test_zero_cost_scale_net_equals_gross(cfg):
     np.testing.assert_array_equal(ew[1.0]["turnover"].to_numpy(), ew[3.0]["turnover"].to_numpy())
     np.testing.assert_allclose(ew[3.0]["cost"].to_numpy(), 3 * ew[1.0]["cost"].to_numpy(), rtol=1e-14, atol=0)
     assert (ew[1.0]["cost"].iloc[1:] > 0).all()
+
+
+def test_monthly_cov_uses_36_rows(cfg):
+    rng = np.random.default_rng(cfg.run.seed_master)
+    index = pd.DatetimeIndex(pd.date_range("2015-01-31", "2019-12-31", freq="ME"), name="date")
+    monthly = pd.DataFrame(rng.normal(0.005, 0.04, (len(index), len(PANEL))), index=index, columns=PANEL)
+    t = pd.Timestamp("2018-06-29")  # a last trading day, not the calendar month end
+    Sigma, log, X = monthly_sample_cov(monthly, t, cfg)
+    assert len(X) == cfg.sample.window_months == 36
+    assert X.index[0].to_period("M") == pd.Period("2015-07", "M")
+    assert X.index[-1].to_period("M") == pd.Period("2018-06", "M")
+    rows = monthly.loc["2015-07-01":"2018-06-30"].to_numpy()
+    assert rows.shape[0] == 36
+    C = np.cov(rows, rowvar=False, ddof=1)
+    assert log["ridge"] == 0.0
+    np.testing.assert_array_equal(Sigma.to_numpy(), 0.5 * (C + C.T))
+    # The engine's "sample" Sigma is this matrix; returns_d is not read for it.
+    inputs = MonthlySampleInputs(t, None, monthly, None, cfg)
+    np.testing.assert_array_equal(inputs.sigma("sample")[0].to_numpy(), Sigma.to_numpy())
+    # A month missing from the window is an error, not a 35-row covariance.
+    with pytest.raises(ValueError):
+        monthly_sample_cov(monthly.drop(pd.Timestamp("2017-03-31")), t, cfg)

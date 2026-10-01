@@ -1,0 +1,5 @@
+sigma_basis,strategy_id,n_months,ruined,ruin_month,ann_return,ann_vol,sharpe,max_dd,forecast_vol_ann,fcst_realised_ratio,mean_turnover,mean_positions,scs_retries,fallbacks,rp_not_converged,ridged_months
+daily,mv_unconstrained|sample|sample|A,191,True,2026-02,-1,1.090392801,,-1,0.9563093253,0.8770319509,29.07818153,17.98429319,0,0,0,0
+monthly,mv_unconstrained|sample|sample|A,9,True,2010-12,-1,2.038007273,,-1,1.099465845,0.5394808247,419.6613954,18,0,0,0,0
+daily,min_variance|sample|none|B,196,False,,0.03229504779,0.03643032933,0.4643489898,-0.1056454623,0.03521415396,0.9666164048,0.03382662222,6.62244898,0,0,0,0
+monthly,min_variance|sample|none|B,196,False,,0.03521528864,0.0364828239,0.5376327987,-0.09706391154,0.03328872761,0.9124493132,0.06640749839,5.755102041,0,0,0,0

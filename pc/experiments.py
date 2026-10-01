@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -16,11 +17,16 @@ import pandas as pd  # noqa: E402
 from pc.backtest import (  # noqa: E402
     BP_PER_UNIT,
     MONTHS_PER_YEAR,
+    DateInputs,
     build_registry,
     walk_forward,
 )
+from pc.calendar import build_calendar  # noqa: E402
 from pc.config import Config  # noqa: E402
+from pc.cov import condition_cov, estimate_cov  # noqa: E402
 from pc.data import load_prices, load_rf_daily  # noqa: E402
+from pc.returns import daily_returns, monthly_excess_returns  # noqa: E402
+from pc.returns_model import trailing_months  # noqa: E402
 from pc.stats import (  # noqa: E402
     CSV_KWARGS,
     PRIMARY_IDS,
@@ -230,3 +236,73 @@ def write_cost_sensitivity(cfg: Config) -> tuple[Path, dict, dict]:
     path = Path(cfg.outputs.tables_dir) / "cost_sensitivity.csv"
     cost_sensitivity(runs, PRIMARY_IDS).to_csv(path, **CSV_KWARGS)
     return path, runs, seconds
+
+
+# --- 5.4 N close to T ------------------------------------------------------------------------
+
+MONTHLY_COV_SPECS = ["mv_unconstrained|sample|sample|A", "min_variance|sample|none|B"]
+ROBUSTNESS_COLUMNS = ["decision_date", "cond_daily", "cond_monthly_before", "cond_monthly_after", "ridge_monthly"]
+
+
+def monthly_sample_cov(monthly_excess: pd.DataFrame, t: pd.Timestamp, cfg: Config) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
+    """(Sigma, log, X): np.cov (ddof 1) of the window_months monthly excess returns of trailing_months
+    for the month of t, conditioned by condition_cov (amendment 5.4). X is the rows used."""
+    X = trailing_months(monthly_excess, t, cfg.sample.window_months - 1, 0)
+    S = pd.DataFrame(np.cov(X.to_numpy(dtype=float), rowvar=False, ddof=1), index=X.columns, columns=X.columns)
+    Sigma, log = condition_cov(S, cfg.cov.max_cond)
+    log["lw_delta"] = math.nan
+    return Sigma, log, X
+
+
+class MonthlySampleInputs(DateInputs):
+    """DateInputs whose "sample" Sigma is the monthly sample covariance; every other estimator is unchanged."""
+
+    def sigma(self, est: str) -> tuple[pd.DataFrame, dict]:
+        if est == "sample" and est not in self._sigma:
+            Sigma, log, _ = monthly_sample_cov(self.monthly_excess, self.t, self.cfg)
+            self._sigma[est] = (Sigma, log)
+        return super().sigma(est)
+
+
+def monthly_cov_robustness(prices: pd.DataFrame, rf_daily: pd.Series, cfg: Config) -> pd.DataFrame:
+    """One row per decision date: cond of the daily sample Sigma (before conditioning), and cond
+    before and after conditioning and the ridge of the monthly sample Sigma."""
+    returns_d = daily_returns(prices)
+    monthly_excess = monthly_excess_returns(prices, rf_daily)
+    rows = []
+    for t in build_calendar(prices.index, cfg)["decision_date"]:
+        _, daily_log = estimate_cov(returns_d, t, "sample", cfg)
+        _, log, _ = monthly_sample_cov(monthly_excess, t, cfg)
+        rows.append({"decision_date": t, "cond_daily": daily_log["cond_before"],
+                     "cond_monthly_before": log["cond_before"], "cond_monthly_after": log["cond_after"],
+                     "ridge_monthly": log["ridge"]})
+    return pd.DataFrame(rows, columns=ROBUSTNESS_COLUMNS)
+
+
+def monthly_cov_strategies(daily_periods: pd.DataFrame, monthly_periods: pd.DataFrame, ids: list[str]) -> pd.DataFrame:
+    """metrics_all columns for each strategy on the daily Sigma, then on the monthly Sigma, with a
+    leading column sigma_basis ("daily" or "monthly")."""
+    frames = []
+    for sid in ids:
+        for basis, periods in (("daily", daily_periods), ("monthly", monthly_periods)):
+            m = strategy_metrics(periods[periods["strategy_id"] == sid])
+            m.insert(0, "sigma_basis", basis)
+            frames.append(m)
+    return pd.concat(frames, ignore_index=True)
+
+
+def write_monthly_cov(cfg: Config) -> tuple[list[Path], pd.DataFrame, dict]:
+    prices, rf_daily = load_panel(cfg)
+    seconds = {}
+    start = time.perf_counter()
+    robustness = monthly_cov_robustness(prices, rf_daily, cfg)
+    seconds["robustness"] = time.perf_counter() - start
+    start = time.perf_counter()
+    _, monthly, _ = walk_forward(specs_for(cfg, MONTHLY_COV_SPECS), prices, rf_daily, cfg, MonthlySampleInputs)
+    seconds["walk_forward"] = time.perf_counter() - start
+    daily = pd.read_parquet(Path(cfg.outputs.results_dir) / "periods.parquet")
+    tables = Path(cfg.outputs.tables_dir)
+    paths = [tables / "monthly_cov_robustness.csv", tables / "monthly_cov_strategies.csv"]
+    robustness.to_csv(paths[0], **CSV_KWARGS)
+    monthly_cov_strategies(daily, monthly, MONTHLY_COV_SPECS).to_csv(paths[1], **CSV_KWARGS)
+    return paths, monthly, seconds

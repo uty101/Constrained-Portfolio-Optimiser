@@ -207,10 +207,12 @@ def _sort(frame: pd.DataFrame, specs: list[StrategySpec]) -> pd.DataFrame:
 
 
 def walk_forward(
-    specs: list[StrategySpec], prices: pd.DataFrame, rf_daily: pd.Series, cfg: Config
+    specs: list[StrategySpec], prices: pd.DataFrame, rf_daily: pd.Series, cfg: Config,
+    inputs_cls: type[DateInputs] = DateInputs,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
     """run_walk_forward, plus wall seconds per strategy id (allocation and bookkeeping) and under
-    "shared" (mu and Sigma at each date, each computed once and reused by every strategy)."""
+    "shared" (mu and Sigma at each date, each computed once and reused by every strategy).
+    inputs_cls builds the per-date inputs; step 5.4 passes a subclass with a monthly sample Sigma."""
     tickers = list(cfg.universe.tickers)
     if list(prices.columns) != tickers:
         raise ValueError("prices columns are not the configured tickers in config order")
@@ -235,7 +237,7 @@ def walk_forward(
     for k, row in enumerate(cal.itertuples(index=False)):
         t = row.decision_date
         start = time.perf_counter()
-        inputs = DateInputs(t, returns_d, monthly_excess, monthly_total, cfg)
+        inputs = inputs_cls(t, returns_d, monthly_excess, monthly_total, cfg)
         seconds["shared"] += time.perf_counter() - start
         r = hold.iloc[k]
         rf = float(rf_h.iloc[k])
