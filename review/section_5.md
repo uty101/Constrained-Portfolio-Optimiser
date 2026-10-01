@@ -830,9 +830,20 @@ tests/test_experiments.py: 19 warnings
 
 ## Fresh-clone check
 
-`%TEMP%\pcs5`, built as in amendment 2, `.venv\Scripts\python -m pytest --disable-socket -q`:
+Cloned from GitHub at `4c2c7b3` into `%TEMP%\pcs5`, `.venv` built as in amendment 2, then `.venv\Scripts\python -m pytest --disable-socket -q`. The folder was deleted afterwards.
 
-```nPENDING
+```n........................................................................ [ 31%]
+........................................................................ [ 63%]
+........................................................................ [ 95%]
+..........                                                               [100%]
+============================== warnings summary ===============================
+tests/test_backtest.py: 16 warnings
+tests/test_experiments.py: 19 warnings
+  C:\Users\astha\AppData\Local\Temp\pcs5\pc\solver.py:77: UserWarning: Solution may be inaccurate. Try another solver, adjusting the solver settings, or solve with verbose=True for more information.
+    prob.solve(solver=name, **_options(name, scfg))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+226 passed, 35 warnings in 27.84s
 ```
 
 ## Runtime per step
