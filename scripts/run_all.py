@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from pc import charts, cli, cov_eval, data, experiments, sensitivity, stats  # noqa: E402
+from pc import charts, cli, cov_eval, data, experiments, report, sensitivity, stats  # noqa: E402
 from pc.backtest import write_walk_forward  # noqa: E402
 from pc.config import Config, load_config  # noqa: E402
 
@@ -56,6 +56,8 @@ def writers() -> list[tuple[str, object]]:
         ("experiments.write_monthly_cov", experiments.write_monthly_cov),
         ("experiments.write_levered", experiments.write_levered),
         ("experiments.write_answers", experiments.write_answers),
+        # 7. the README tables
+        ("report.write_readme_tables", report.write_readme_tables),
         # 8. the CLI demo
         ("cli.main (6.5 demo)", cli_demo),
     ]
