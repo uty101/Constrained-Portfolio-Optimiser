@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from pc.stats import stationary_bootstrap_indices, strategy_metrics
+from pc.stats import sharpe_intervals, stationary_bootstrap_indices, strategy_metrics
 
 
 def test_bootstrap_indices_shape_and_determinism(cfg):
@@ -108,3 +108,56 @@ def test_metrics_respect_ruin_truncation():
     assert abs(m.sharpe - ex.mean() / np.std(ex, ddof=1) * math.sqrt(12)) <= 1e-12
     assert abs(m.mean_turnover - 0.4) <= 1e-15
     assert abs(m.mean_positions - 4.0) <= 1e-15
+
+
+def interval_inputs(cfg, n=60, reps=500):
+    rng = np.random.default_rng(cfg.run.seed_master)
+    a = rng.normal(0.006, 0.03, n)
+    c = rng.normal(0.004, 0.02, n)
+    p = pd.concat([
+        synthetic_periods("a", a, rf=0.0),
+        synthetic_periods("b", 2 * a, rf=0.0),  # the same Sharpe ratio on every path
+        synthetic_periods("c", c, rf=0.0),
+    ], ignore_index=True)
+    idx = stationary_bootstrap_indices(n, cfg.bootstrap.mean_block, reps, cfg.run.bootstrap_seed)
+    return p, idx, a, c
+
+
+def test_sharpe_intervals_paired_paths(cfg):
+    p, idx, a, c = interval_inputs(cfg)
+    out = sharpe_intervals(p, idx, ["a"]).set_index("strategy_id")
+
+    def path_sharpe(x):
+        return np.array([x[i].mean() / x[i].std(ddof=1) * math.sqrt(12) for i in idx])
+
+    lo, hi = cfg.bootstrap.ci
+    sa, sc = path_sharpe(a), path_sharpe(c)
+    np.testing.assert_allclose(out.loc["a", ["sharpe_p05", "sharpe_p95"]].to_numpy(dtype=float),
+                               np.quantile(sa, [lo, hi]), rtol=0, atol=1e-12)
+    # c against a: path by path on the same indices.
+    d = sc - sa
+    np.testing.assert_allclose(out.loc["c", ["diff_p05_vs_a", "diff_p95_vs_a"]].to_numpy(dtype=float),
+                               np.quantile(d, [lo, hi]), rtol=0, atol=1e-12)
+    assert out.loc["c", "frac_le_0_vs_a"] == np.mean(d <= 0)
+    # b = 2a has a's Sharpe ratio on every path, so the paired difference is 0 on every path.
+    assert abs(out.loc["b", "diff_vs_a"]) <= 1e-12
+    assert abs(out.loc["b", "diff_p05_vs_a"]) <= 1e-12 and abs(out.loc["b", "diff_p95_vs_a"]) <= 1e-12
+    # Unpaired paths would not give 0: the same difference on shifted paths is spread out.
+    shifted = path_sharpe(2 * a)[np.roll(np.arange(len(idx)), 1)] - sa
+    assert np.quantile(shifted, hi) - np.quantile(shifted, lo) > 0.1
+
+
+def test_sharpe_diff_against_self_is_zero(cfg):
+    p, idx, _, _ = interval_inputs(cfg)
+    ruined = synthetic_periods("r", [0.01] * 59 + [-1.0], rf=0.0, ruined=[False] * 59 + [True])
+    out = sharpe_intervals(pd.concat([p, ruined], ignore_index=True), idx, ["a", "c"]).set_index("strategy_id")
+    for b in ("a", "c"):
+        row = out.loc[b]
+        assert row[f"diff_vs_{b}"] == 0.0
+        assert row[f"diff_p05_vs_{b}"] == 0.0 and row[f"diff_p95_vs_{b}"] == 0.0
+        assert row[f"frac_le_0_vs_{b}"] == 1.0
+    # A ruined strategy gets NaN intervals (amendment 4.2.8).
+    assert out.loc["r"].ruined
+    assert out.loc["r", ["sharpe_p05", "sharpe_p95", "diff_vs_a", "diff_p05_vs_c", "frac_le_0_vs_c"]].isna().all()
+    x = np.array([0.01] * 59 + [-1.0])
+    assert abs(out.loc["r", "sharpe"] - x.mean() / x.std(ddof=1) * math.sqrt(12)) <= 1e-12

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import math
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from pc.config import Config
+from pc.config import BootstrapConfig, Config, load_config
 
 
 def stationary_bootstrap_indices(n: int, mean_block: float, reps: int, seed: int) -> np.ndarray:
@@ -96,4 +98,87 @@ def write_metrics(cfg: Config) -> Path:
     periods = pd.read_parquet(Path(cfg.outputs.results_dir) / "periods.parquet")
     path = Path(cfg.outputs.tables_dir) / "metrics_all.csv"
     strategy_metrics(periods).to_csv(path, **CSV_KWARGS)
+    return path
+
+
+# --- Sharpe intervals (kickoff 5.8, PLAN 4.4) ---------------------------------------------
+
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.toml"
+
+
+@lru_cache(maxsize=1)
+def bootstrap_config() -> BootstrapConfig:
+    """[bootstrap] from the repo's config.toml: sharpe_intervals has no Config argument (as pc.solver)."""
+    return load_config(CONFIG_PATH).bootstrap
+
+
+# PLAN 4.4: the Sharpe difference is reported against these two strategies.
+BENCHMARKS = ["equal_weight|none|none|none", "min_variance|lw_cc|none|B"]
+
+
+def interval_columns(benchmarks: list[str]) -> list[str]:
+    cols = ["strategy_id", "ruined", "sharpe", "sharpe_p05", "sharpe_p95"]
+    for b in benchmarks:
+        cols += [f"diff_vs_{b}", f"diff_p05_vs_{b}", f"diff_p95_vs_{b}", f"frac_le_0_vs_{b}"]
+    return cols
+
+
+def boot_sharpe(excess: np.ndarray, idx: np.ndarray) -> np.ndarray:
+    """Sharpe on each resampled path: excess[idx] row by row, ddof SHARPE_DDOF."""
+    x = excess[idx]
+    return x.mean(axis=1) / x.std(axis=1, ddof=SHARPE_DDOF) * np.sqrt(MONTHS_PER_YEAR)
+
+
+def sharpe_intervals(periods: pd.DataFrame, idx: np.ndarray, benchmarks: list[str]) -> pd.DataFrame:
+    """Sharpe 90% interval per strategy and paired differences against each benchmark.
+
+    Every strategy is resampled on the same index paths idx (reps x n, n = months per
+    strategy), so a difference is taken path by path. Percentiles are np.quantile at
+    (p05, p95) = bootstrap.ci with numpy's default rule (decisions/section_2_review.md, 1).
+    frac_le_0 is the fraction of paths whose difference is <= 0. A ruined strategy keeps its
+    point Sharpe (over the months of its wealth path, as in strategy_metrics); its interval,
+    and every difference involving it, is NaN (amendment 4.2.8).
+    """
+    ci = bootstrap_config().ci
+    series, ruined = {}, {}
+    for sid, p in periods.groupby("strategy_id", sort=False):
+        p = p.sort_values("decision_date")
+        series[sid] = p["excess_net"].to_numpy(dtype=float)
+        ruined[sid] = bool(p["ruined"].any())
+        if len(series[sid]) != idx.shape[1]:
+            raise ValueError(f"{sid}: {len(series[sid])} months, index paths have {idx.shape[1]}")
+    for b in benchmarks:
+        if b not in series:
+            raise ValueError(f"benchmark {b!r} is not in periods")
+
+    boots = {sid: None if ruined[sid] else boot_sharpe(x, idx) for sid, x in series.items()}
+    point = {sid: sharpe(x[~np.isnan(x)]) for sid, x in series.items()}
+    nan = math.nan
+    rows = []
+    for sid in series:
+        row = {"strategy_id": sid, "ruined": ruined[sid], "sharpe": point[sid]}
+        if boots[sid] is None:
+            row["sharpe_p05"] = row["sharpe_p95"] = nan
+        else:
+            row["sharpe_p05"], row["sharpe_p95"] = np.quantile(boots[sid], ci)
+        for b in benchmarks:
+            if boots[sid] is None or boots[b] is None:
+                vals = (nan, nan, nan, nan)
+            else:
+                d = boots[sid] - boots[b]
+                lo, hi = np.quantile(d, ci)
+                vals = (point[sid] - point[b], lo, hi, float(np.mean(d <= 0)))
+            for col, v in zip(interval_columns([b])[5:], vals):
+                row[col] = v
+        rows.append(row)
+    return pd.DataFrame(rows, columns=interval_columns(benchmarks))
+
+
+def write_sharpe_intervals(cfg: Config) -> Path:
+    periods = pd.read_parquet(Path(cfg.outputs.results_dir) / "periods.parquet")
+    n = periods.groupby("strategy_id").size().iloc[0]
+    b = cfg.bootstrap
+    idx = stationary_bootstrap_indices(int(n), b.mean_block, b.reps, cfg.run.bootstrap_seed)
+    path = Path(cfg.outputs.tables_dir) / "sharpe_intervals.csv"
+    sharpe_intervals(periods, idx, BENCHMARKS).to_csv(path, **CSV_KWARGS)
     return path
