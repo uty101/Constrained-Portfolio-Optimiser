@@ -90,7 +90,8 @@ TURNOVER_SPEC = "mv_constrained|lw_cc|sample|C"
 FRONTIER_COLUMNS = [
     "tau", "mean_mu_exante", "exante_return_given_up_bp_pa", "mean_cost", "cost_saved_bp_pa",
     "realised_net_ann_return", "realised_net_vs_none_bp_pa", "mean_turnover", "mean_dual_bp_per_pct",
-    "n_binding", "n_relaxed",
+    "n_binding", "n_relaxed", "realised_net_vs_none_p05", "realised_net_vs_none_p95",
+    "realised_net_vs_none_frac_le_0",
 ]
 
 
@@ -111,7 +112,18 @@ def turnover_runs(prices: pd.DataFrame, rf_daily: pd.Series, cfg: Config) -> tup
     return runs, seconds
 
 
-def turnover_frontier(runs: dict) -> pd.DataFrame:
+def paired_diff_interval(diff: np.ndarray, idx: np.ndarray, ci) -> tuple[float, float, float]:
+    """(p05, p95, frac_le_0) of mean(diff) x 12 x 1e4 over the index paths idx (reps x n): one mean
+    per replication, np.quantile at ci (decisions/section_2_review.md, 1), and the fraction of
+    replications at or below 0 (instruction 06, step 6.0.b)."""
+    if idx.shape[1] != len(diff):
+        raise ValueError(f"{len(diff)} paired months, index paths have {idx.shape[1]}")
+    boots = diff[idx].mean(axis=1) * MONTHS_PER_YEAR * BP_PER_UNIT
+    lo, hi = np.quantile(boots, ci)
+    return float(lo), float(hi), float(np.mean(boots <= 0))
+
+
+def turnover_frontier(runs: dict, cfg: Config) -> pd.DataFrame:
     """One row per tau, then "none" (amendment 5.2).
 
     Monthly means (mu_exante, cost, turnover, turnover_dual, ret_net) exclude the first period.
@@ -121,13 +133,27 @@ def turnover_frontier(runs: dict) -> pd.DataFrame:
     realised_net_ann_return is the annualised net return over the whole wealth path, as in
     metrics_all; mean_dual_bp_per_pct = mean turnover_dual x 100; n_binding counts months with
     turnover >= tau_eff - 1e-6; n_relaxed counts tau_relaxed months.
+    realised_net_vs_none_p05, _p95 and _frac_le_0 bootstrap the paired monthly differences
+    ret_net(tau) - ret_net(none) over the same months as the point estimate, on
+    stationary_bootstrap_indices(n, bootstrap.mean_block, bootstrap.reps, run.bootstrap_seed);
+    NaN on the "none" row (instruction 06, step 6.0.b).
     """
     if None not in runs:
         raise ValueError("the turnover frontier needs the run with no turnover limit")
     none = after_first(runs[None])
+    none_net = none.set_index("decision_date")["ret_net"]
+    b = cfg.bootstrap
+    idx = stationary_bootstrap_indices(len(none), b.mean_block, b.reps, cfg.run.bootstrap_seed)
     rows = []
     for tau, p in runs.items():
         live = after_first(p)
+        if tau is None:
+            interval = (math.nan, math.nan, math.nan)
+        else:
+            net = live.set_index("decision_date")["ret_net"]
+            if not net.index.equals(none_net.index):
+                raise ValueError(f"tau {tau}: decision dates differ from the run with no limit")
+            interval = paired_diff_interval((net - none_net).to_numpy(dtype=float), idx, b.ci)
         rows.append({
             "tau": "none" if tau is None else tau,
             "mean_mu_exante": float(live["mu_exante"].mean()),
@@ -140,6 +166,9 @@ def turnover_frontier(runs: dict) -> pd.DataFrame:
             "mean_dual_bp_per_pct": float(live["turnover_dual"].mean() * BP_PER_PCT),
             "n_binding": int((live["turnover"] >= live["tau_eff"] - BINDING_SLACK).sum()),
             "n_relaxed": int(live["tau_relaxed"].sum()),
+            "realised_net_vs_none_p05": interval[0],
+            "realised_net_vs_none_p95": interval[1],
+            "realised_net_vs_none_frac_le_0": interval[2],
         })
     return pd.DataFrame(rows, columns=FRONTIER_COLUMNS)
 
@@ -188,7 +217,7 @@ def plot_turnover_frontier(table: pd.DataFrame, path: Path) -> None:
 def write_turnover_frontier(cfg: Config) -> tuple[list[Path], dict, dict]:
     prices, rf_daily = load_panel(cfg)
     runs, seconds = turnover_runs(prices, rf_daily, cfg)
-    table = turnover_frontier(runs)
+    table = turnover_frontier(runs, cfg)
     paths = [Path(cfg.outputs.tables_dir) / "turnover_frontier.csv", Path(cfg.outputs.figures_dir) / "turnover_frontier.png"]
     table.to_csv(paths[0], **CSV_KWARGS)
     plot_turnover_frontier(table, paths[1])
@@ -407,27 +436,37 @@ def answers(tables: dict[str, pd.DataFrame], cfg: Config) -> pd.DataFrame:
     q = f'tau == "{tau}"'
     r = one("turnover_frontier.csv", q)
     for col, figure in (("exante_return_given_up_bp_pa", "ex-ante return given up, bp pa"),
-                        ("cost_saved_bp_pa", "trading cost saved, bp pa"),
-                        ("realised_net_vs_none_bp_pa", "realised net return against no limit, bp pa")):
+                        ("cost_saved_bp_pa", "trading cost saved, bp pa")):
         add("Q2", f"tau = {tau}: {figure}", "turnover_frontier.csv", q, r[col])
-    q = 'tau != "none" and exante_return_given_up_bp_pa < cost_saved_bp_pa'
+    # Instruction 06, step 6.0.b: the realised difference at the tightest tau and at the configured
+    # tau, each with its bootstrap interval.
+    for t in sorted({str(cfg.turnover_grid.taus[0]), tau}, key=float):
+        q = f'tau == "{t}"'
+        r = one("turnover_frontier.csv", q)
+        add("Q2", f"tau = {t}: realised net return against no limit, bp pa", "turnover_frontier.csv", q,
+            r["realised_net_vs_none_bp_pa"], r["realised_net_vs_none_p05"], r["realised_net_vs_none_p95"])
+    # Open decision 9, option 2 (decisions/section_6_review.md, 3): a tau that never binds lies on
+    # the line, not below it.
+    q = 'tau != "none" and n_binding > 0 and exante_return_given_up_bp_pa < cost_saved_bp_pa'
     below = source_rows(tables["turnover_frontier.csv"], q)
     largest = float(below["tau"].astype(float).max()) if len(below) else math.nan
     rows.append({"question": "Q2", "figure": "largest tau whose point lies below the 45 degree line",
                  "value": largest, "p05": math.nan, "p95": math.nan, "source_table": "turnover_frontier.csv",
                  "source_row": q})
 
-    # Q3: sensitivity of the weights to sampling noise in mu, at the last date.
+    # Q3: sensitivity of the weights to sampling noise in mu: mean_abs_change at the last date, and
+    # the 2 ratios at each sensitivity date (decisions/section_6_review.md, 6).
     last = str(cfg.sensitivity.dates[-1])
     summary = "sensitivity_summary.csv"
     for sid in MU_STRATEGIES:
         q = f'date == "{last}" and strategy == "{sid}"'
         add("Q3", f"{last}: mean_abs_change, {sid}", summary, q, one(summary, q)["mean_abs_change"])
-    base = one(summary, f'date == "{last}" and strategy == "{SENSITIVITY_BASE}"')["mean_abs_change"]
-    for sid in SENSITIVITY_RATIOS:
-        q = f'date == "{last}" and strategy in ["{sid}", "{SENSITIVITY_BASE}"]'
-        add("Q3", f"{last}: mean_abs_change ratio, {sid} / {SENSITIVITY_BASE}", summary, q,
-            one(summary, f'date == "{last}" and strategy == "{sid}"')["mean_abs_change"] / base)
+    for date in (str(d) for d in cfg.sensitivity.dates):
+        base = one(summary, f'date == "{date}" and strategy == "{SENSITIVITY_BASE}"')["mean_abs_change"]
+        for sid in SENSITIVITY_RATIOS:
+            q = f'date == "{date}" and strategy in ["{sid}", "{SENSITIVITY_BASE}"]'
+            add("Q3", f"{date}: mean_abs_change ratio, {sid} / {SENSITIVITY_BASE}", summary, q,
+                one(summary, f'date == "{date}" and strategy == "{sid}"')["mean_abs_change"] / base)
 
     # Q4: covariance estimators.
     for pset in ("ew", "gmv"):

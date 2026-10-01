@@ -54,7 +54,7 @@ def panel(cfg, n_decisions=12):
 def test_turnover_frontier_monotone_turnover(cfg):
     prices, rf_daily, pcfg = panel(cfg)
     runs, _ = turnover_runs(prices, rf_daily, pcfg)
-    table = turnover_frontier(runs)
+    table = turnover_frontier(runs, pcfg)
     assert table["tau"].tolist() == [*cfg.turnover_grid.taus, "none"]
     turnover = table["mean_turnover"].to_numpy(dtype=float)
     # Non-decreasing in tau, "none" last. 1e-7 is the step 3.4 turnover tolerance: a slack limit
@@ -70,6 +70,12 @@ def test_turnover_frontier_monotone_turnover(cfg):
     none = table.set_index("tau").loc["none"]
     assert none.exante_return_given_up_bp_pa == 0 and none.cost_saved_bp_pa == 0
     assert none.realised_net_vs_none_bp_pa == 0 and none.n_binding == 0
+    # Step 6.0.b: the bootstrap interval is NaN on the "none" row and ordered on every tau row.
+    assert np.isnan(none.realised_net_vs_none_p05) and np.isnan(none.realised_net_vs_none_p95)
+    assert np.isnan(none.realised_net_vs_none_frac_le_0)
+    taus = table[table["tau"] != "none"]
+    assert (taus["realised_net_vs_none_p05"] <= taus["realised_net_vs_none_p95"]).all()
+    assert taus["realised_net_vs_none_frac_le_0"].between(0, 1).all()
 
 
 def test_zero_cost_scale_net_equals_gross(cfg):
@@ -128,9 +134,14 @@ def answer_tables(cfg):
         "metrics_all.csv": pd.DataFrame({"strategy_id": ids, "ruined": [True, False, False, False, False]}),
         "turnover_frontier.csv": pd.DataFrame({
             "tau": taus, "exante_return_given_up_bp_pa": [9.0, 7.0, 5.0, 3.0, 0.4, 0.2, 0.1, 0.0],
-            "cost_saved_bp_pa": [4.0, 3.0, 2.0, 1.0, 0.5, 0.1, 0.05, 0.0], "realised_net_vs_none_bp_pa": rng.random(8)}),
-        "sensitivity_summary.csv": pd.DataFrame({"date": str(cfg.sensitivity.dates[-1]), "strategy": strategies,
-                                                 "mean_abs_change": [40.0, 0.8, 0.6, 0.2, 0.0]}),
+            "cost_saved_bp_pa": [4.0, 3.0, 2.0, 1.0, 0.5, 0.1, 0.05, 0.0], "realised_net_vs_none_bp_pa": rng.random(8),
+            "realised_net_vs_none_p05": rng.random(8) - 1, "realised_net_vs_none_p95": rng.random(8) + 1,
+            # tau 1.0 lies below the line (0.0 < 0.05) but never binds, so it lies on it (step 6.0.a.3).
+            "n_binding": [9, 8, 7, 6, 5, 4, 0, 0]}),
+        "sensitivity_summary.csv": pd.DataFrame({
+            "date": [str(d) for d in cfg.sensitivity.dates for _ in strategies],
+            "strategy": strategies * len(cfg.sensitivity.dates),
+            "mean_abs_change": [40.0, 0.8, 0.6, 0.2, 0.0, 30.0, 0.5, 0.4, 0.75, 0.0, 20.0, 0.8, 0.6, 0.2, 0.0]}),
         "cov_eval_qlike_diff.csv": pd.DataFrame({"estimator": [e for e, _ in est], "portfolio_set": [s for _, s in est],
                                                  "diff_vs_lw_cc": rng.random(6), "p05": rng.random(6) - 1,
                                                  "p95": rng.random(6) + 1}),
@@ -145,7 +156,9 @@ def test_answers_has_4_rows_with_sources(cfg):
     assert list(out.columns) == ANSWER_COLUMNS
     # The 4 research questions (kickoff Section 1), each answered, in order.
     assert out["question"].unique().tolist() == ["Q1", "Q2", "Q3", "Q4"]
-    assert out.groupby("question").size().tolist() == [6, 4, 6, 4]
+    # Step 6.0: Q2 gains the realised difference at tau 0.05 with its interval; Q3 carries the 2
+    # ratios at each of the 3 sensitivity dates.
+    assert out.groupby("question").size().tolist() == [6, 5, 10, 4]
     for row in out.itertuples():
         src = source_rows(tables[row.source_table], row.source_row)
         assert len(src) >= 1, row.figure
@@ -157,11 +170,25 @@ def test_answers_has_4_rows_with_sources(cfg):
                 assert np.isnan(bound) or bound in cells, row.figure
     a = out.set_index("figure")
     assert a.loc["ruined set A strategies, of 2", "value"] == 1
-    # Only tau 0.5 lies below the 45 degree line (given up 0.4 < saved 0.5); 0.75 and 1.0 lie above.
+    # Only tau 0.5 lies below the 45 degree line (given up 0.4 < saved 0.5); 0.75 lies above, and
+    # 1.0 lies below it numerically but never binds.
     assert a.loc["largest tau whose point lies below the 45 degree line", "value"] == 0.5
-    last = str(cfg.sensitivity.dates[-1])
-    ratio = a.loc[f"{last}: mean_abs_change ratio, black_litterman|lw_cc|bl|B / mv_constrained|lw_cc|sample|B", "value"]
-    assert ratio == 0.2 / 0.8
+    frontier = tables["turnover_frontier.csv"].set_index("tau")
+    for t in ("0.05", "0.3"):
+        r = a.loc[f"tau = {t}: realised net return against no limit, bp pa"]
+        assert (r.value, r.p05, r.p95) == tuple(frontier.loc[t, ["realised_net_vs_none_bp_pa", "realised_net_vs_none_p05",
+                                                                   "realised_net_vs_none_p95"]])
+    pair = "black_litterman|lw_cc|bl|B / mv_constrained|lw_cc|sample|B"
+    for date, expected in zip(cfg.sensitivity.dates, (0.2 / 0.8, 0.75 / 0.5, 0.2 / 0.8)):
+        assert a.loc[f"{date}: mean_abs_change ratio, {pair}", "value"] == expected
+
+
+def test_largest_tau_below_line_nan_when_none_binds(cfg):
+    # Decision 9, option 2: points below the line only where the limit never binds give NaN.
+    tables = answer_tables(cfg)
+    tables["turnover_frontier.csv"]["cost_saved_bp_pa"] = [4.0, 3.0, 2.0, 1.0, 0.3, 0.1, 0.05, 0.0]
+    out = answers(tables, cfg).set_index("figure")
+    assert np.isnan(out.loc["largest tau whose point lies below the 45 degree line", "value"])
 
 
 def test_frontier_max_sharpe(cfg):
