@@ -1,0 +1,3 @@
+frontier,max_sharpe,tangency_return,tangency_vol,solver,status
+A,1.717499906,,,closed_form,supremum_not_attained
+B,1.09826599,0.1127005631,0.1026168197,CLARABEL,optimal

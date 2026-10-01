@@ -10,6 +10,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import cvxpy as cp  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -22,14 +23,18 @@ from pc.backtest import (  # noqa: E402
     walk_forward,
 )
 from pc.calendar import build_calendar  # noqa: E402
+from pc.charts import frontier_inputs, holding_excess  # noqa: E402
 from pc.config import Config  # noqa: E402
 from pc.cov import condition_cov, estimate_cov  # noqa: E402
 from pc.data import load_prices, load_rf_daily  # noqa: E402
 from pc.returns import daily_returns, monthly_excess_returns  # noqa: E402
 from pc.returns_model import trailing_months  # noqa: E402
+from pc.sensitivity import MU_STRATEGIES  # noqa: E402
+from pc.solver import solve, symmetrise  # noqa: E402
 from pc.stats import (  # noqa: E402
     CSV_KWARGS,
     PRIMARY_IDS,
+    sharpe_intervals,
     strategy_metrics,
 )
 
@@ -38,6 +43,7 @@ DPI = 150  # kickoff Section 6: figures at 150 dpi
 BP_PER_PCT = BP_PER_UNIT / 100
 # Amendment 5.2: a month binds when turnover >= tau_eff - 1e-6 (convention 22).
 BINDING_SLACK = 1e-6
+EW_ID = "equal_weight|none|none|none"
 # Chart 4 presentation: axis padding, and the share of each axis span within which a point counts as
 # at the origin and its label is stacked.
 CHART4_PAD = 0.06
@@ -306,3 +312,149 @@ def write_monthly_cov(cfg: Config) -> tuple[list[Path], pd.DataFrame, dict]:
     robustness.to_csv(paths[0], **CSV_KWARGS)
     monthly_cov_strategies(daily, monthly, MONTHLY_COV_SPECS).to_csv(paths[1], **CSV_KWARGS)
     return paths, monthly, seconds
+
+
+# --- 5.5 answers table -----------------------------------------------------------------------
+
+MAX_SHARPE_COLUMNS = ["frontier", "max_sharpe", "tangency_return", "tangency_vol", "solver", "status"]
+ANSWER_COLUMNS = ["question", "figure", "value", "p05", "p95", "source_table", "source_row"]
+# Amendment 5.5, Q1 and Q2: the strategies whose out-of-sample Sharpe is reported.
+Q1_STRATEGIES = ["mv_constrained|lw_cc|sample|C", EW_ID, "min_variance|lw_cc|none|B"]
+SENSITIVITY_BASE = "mv_constrained|lw_cc|sample|B"
+SENSITIVITY_RATIOS = ["mv_constrained|lw_cc|bayes_stein|B", "black_litterman|lw_cc|bl|B"]
+
+
+def frontier_max_sharpe(mu: pd.Series, Sigma: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """The in-sample maximum Sharpe ratio of the set A and set B frontiers of Chart 1 (annualised
+    mu and Sigma of the holding-period excess returns).
+
+    Set A, closed form, with A = mu'S^-1 mu, B = 1'S^-1 mu, C = 1'S^-1 1. When B > 0 the maximum
+    is sqrt(A), at the tangency return A/B. When B <= 0 the budget-1 frontier's Sharpe ratio
+    rises towards sqrt(A - B^2/C) as the target return grows and never reaches it: that supremum
+    is reported, with NaN tangency return and vol and status "supremum_not_attained"
+    (decisions/OPEN.md, item 8).
+    Set B: with y = kappa w, min y'Sigma y s.t. mu'y = 1, 1'y = kappa, lower kappa <= y <= upper kappa,
+    kappa >= 0, under the solver policy; w = y / kappa.
+    """
+    m = mu.to_numpy(dtype=float)
+    S = symmetrise(Sigma)
+    inv = np.linalg.solve(S, np.column_stack([m, np.ones(len(m))]))
+    A, B, C = float(m @ inv[:, 0]), float(inv[:, 0].sum()), float(inv[:, 1].sum())
+    if B > 0:
+        row_a = {"max_sharpe": float(np.sqrt(A)), "tangency_return": A / B, "tangency_vol": float(np.sqrt(A)) / B,
+                 "status": "optimal"}
+    else:
+        row_a = {"max_sharpe": float(np.sqrt(A - B**2 / C)), "tangency_return": math.nan, "tangency_vol": math.nan,
+                 "status": "supremum_not_attained"}
+    rows = [{"frontier": "A", **row_a, "solver": "closed_form"}]
+    y, kappa = cp.Variable(len(m)), cp.Variable()
+    prob = cp.Problem(cp.Minimize(cp.quad_form(y, S)), [
+        m @ y == 1, cp.sum(y) == kappa, y >= cfg.mv.lower * kappa, y <= cfg.mv.upper * kappa, kappa >= 0])
+    rec = solve(prob)
+    if rec.fallback:
+        rows.append({"frontier": "B", "max_sharpe": math.nan, "tangency_return": math.nan,
+                     "tangency_vol": math.nan, "solver": rec.solver, "status": rec.status})
+    else:
+        w_b = np.asarray(y.value, dtype=float) / float(kappa.value)
+        ret, vol = float(m @ w_b), float(np.sqrt(w_b @ S @ w_b))
+        rows.append({"frontier": "B", "max_sharpe": ret / vol, "tangency_return": ret, "tangency_vol": vol,
+                     "solver": rec.solver, "status": rec.status})
+    return pd.DataFrame(rows, columns=MAX_SHARPE_COLUMNS)
+
+
+def source_rows(table: pd.DataFrame, query: str) -> pd.DataFrame:
+    """The rows of a source table that an answers.csv source_row selects (a DataFrame.query string)."""
+    return table.query(query, engine="python")
+
+
+def answers(tables: dict[str, pd.DataFrame], cfg: Config) -> pd.DataFrame:
+    """answers.csv (amendment 5.5): one row per figure, each read from its source table, with the
+    table's file name and a DataFrame.query string selecting the row or rows it came from. p05 and
+    p95 are NaN for a figure that has no interval."""
+    rows = []
+
+    def add(question, figure, table, query, value, p05=math.nan, p95=math.nan):
+        if len(source_rows(tables[table], query)) == 0:
+            raise ValueError(f"{table}: no row for {query!r}")
+        rows.append({"question": question, "figure": figure, "value": value, "p05": p05, "p95": p95,
+                     "source_table": table, "source_row": query})
+
+    def one(table, query):
+        r = source_rows(tables[table], query)
+        if len(r) != 1:
+            raise ValueError(f"{table}: {len(r)} rows for {query!r}, expected 1")
+        return r.iloc[0]
+
+    # Q1: in-sample gap against out-of-sample results.
+    for frontier in ("A", "B"):
+        q = f'frontier == "{frontier}"'
+        add("Q1", f"in-sample max Sharpe, set {frontier} frontier", "frontier_max_sharpe.csv", q,
+            one("frontier_max_sharpe.csv", q)["max_sharpe"])
+    for sid in Q1_STRATEGIES:
+        q = f'strategy_id == "{sid}"'
+        r = one("sharpe_intervals.csv", q)
+        add("Q1", f"out-of-sample Sharpe, {sid}", "sharpe_intervals.csv", q, r["sharpe"], r["sharpe_p05"],
+            r["sharpe_p95"])
+    q = 'strategy_id.str.endswith("|A")'
+    set_a = source_rows(tables["metrics_all.csv"], q)
+    add("Q1", f"ruined set A strategies, of {len(set_a)}", "metrics_all.csv", q, int(set_a["ruined"].sum()))
+
+    # Q2: the turnover limit.
+    tau = str(cfg.mv.max_turnover)
+    q = f'tau == "{tau}"'
+    r = one("turnover_frontier.csv", q)
+    for col, figure in (("exante_return_given_up_bp_pa", "ex-ante return given up, bp pa"),
+                        ("cost_saved_bp_pa", "trading cost saved, bp pa"),
+                        ("realised_net_vs_none_bp_pa", "realised net return against no limit, bp pa")):
+        add("Q2", f"tau = {tau}: {figure}", "turnover_frontier.csv", q, r[col])
+    q = 'tau != "none" and exante_return_given_up_bp_pa < cost_saved_bp_pa'
+    below = source_rows(tables["turnover_frontier.csv"], q)
+    largest = float(below["tau"].astype(float).max()) if len(below) else math.nan
+    rows.append({"question": "Q2", "figure": "largest tau whose point lies below the 45 degree line",
+                 "value": largest, "p05": math.nan, "p95": math.nan, "source_table": "turnover_frontier.csv",
+                 "source_row": q})
+
+    # Q3: sensitivity of the weights to sampling noise in mu, at the last date.
+    last = str(cfg.sensitivity.dates[-1])
+    summary = "sensitivity_summary.csv"
+    for sid in MU_STRATEGIES:
+        q = f'date == "{last}" and strategy == "{sid}"'
+        add("Q3", f"{last}: mean_abs_change, {sid}", summary, q, one(summary, q)["mean_abs_change"])
+    base = one(summary, f'date == "{last}" and strategy == "{SENSITIVITY_BASE}"')["mean_abs_change"]
+    for sid in SENSITIVITY_RATIOS:
+        q = f'date == "{last}" and strategy in ["{sid}", "{SENSITIVITY_BASE}"]'
+        add("Q3", f"{last}: mean_abs_change ratio, {sid} / {SENSITIVITY_BASE}", summary, q,
+            one(summary, f'date == "{last}" and strategy == "{sid}"')["mean_abs_change"] / base)
+
+    # Q4: covariance estimators.
+    for pset in ("ew", "gmv"):
+        q = f'estimator == "ewma" and portfolio_set == "{pset}"'
+        r = one("cov_eval_qlike_diff.csv", q)
+        add("Q4", f"QLIKE difference against lw_cc, ewma on {pset}", "cov_eval_qlike_diff.csv", q,
+            r["diff_vs_lw_cc"], r["p05"], r["p95"])
+    for est in ("ewma", "lw_cc"):
+        q = f'estimator == "{est}" and portfolio_set == "gmv"'
+        add("Q4", f"bias ratio, {est} on gmv", "cov_eval.csv", q, one("cov_eval.csv", q)["bias_ratio"])
+    return pd.DataFrame(rows, columns=ANSWER_COLUMNS)
+
+
+ANSWER_SOURCES = ["frontier_max_sharpe.csv", "sharpe_intervals.csv", "metrics_all.csv", "turnover_frontier.csv",
+                  "sensitivity_summary.csv", "cov_eval_qlike_diff.csv", "cov_eval.csv"]
+
+
+def read_tables(tables_dir: Path, names: list[str]) -> dict[str, pd.DataFrame]:
+    """Source tables as written. turnover_frontier.csv's tau and sensitivity_summary.csv's date are
+    read as text, the form answers.csv's source_row queries use."""
+    as_text = {"turnover_frontier.csv": {"tau": str}, "sensitivity_summary.csv": {"date": str}}
+    return {n: pd.read_csv(tables_dir / n, dtype=as_text.get(n)) for n in names}
+
+
+def write_answers(cfg: Config) -> tuple[list[Path], pd.DataFrame]:
+    prices, rf_daily = load_panel(cfg)
+    mu, Sigma = frontier_inputs(holding_excess(prices, rf_daily, cfg))
+    tables = Path(cfg.outputs.tables_dir)
+    paths = [tables / "frontier_max_sharpe.csv", tables / "answers.csv"]
+    frontier_max_sharpe(mu, Sigma, cfg).to_csv(paths[0], **CSV_KWARGS)
+    table = answers(read_tables(tables, ANSWER_SOURCES), cfg)
+    table.to_csv(paths[1], **CSV_KWARGS)
+    return paths, table

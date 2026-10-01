@@ -5,10 +5,15 @@ import pandas as pd
 import pytest
 
 from pc.experiments import (
+    ANSWER_COLUMNS,
+    EW_ID,
     MonthlySampleInputs,
+    answers,
     cost_runs,
     cost_sensitivity,
+    frontier_max_sharpe,
     monthly_sample_cov,
+    source_rows,
     turnover_frontier,
     turnover_runs,
 )
@@ -101,3 +106,84 @@ def test_monthly_cov_uses_36_rows(cfg):
     # A month missing from the window is an error, not a 35-row covariance.
     with pytest.raises(ValueError):
         monthly_sample_cov(monthly.drop(pd.Timestamp("2017-03-31")), t, cfg)
+
+
+def answer_tables(cfg):
+    """Synthetic source tables with the columns and rows answers() reads, and distinct values."""
+    rng = np.random.default_rng(cfg.run.seed_master)
+    ids = ["mv_unconstrained|sample|sample|A", "mv_unconstrained|lw_cc|sample|A", "mv_constrained|lw_cc|sample|C",
+           "min_variance|lw_cc|none|B", EW_ID]
+    taus = [*(str(x) for x in cfg.turnover_grid.taus), "none"]
+    strategies = ["mv_unconstrained|sample|sample|A", "mv_constrained|lw_cc|sample|B",
+                  "mv_constrained|lw_cc|bayes_stein|B", "black_litterman|lw_cc|bl|B", "min_variance|lw_cc|none|B"]
+    est = [(e, s) for e in ("sample", "lw_cc", "ewma") for s in ("ew", "gmv")]
+    return {
+        "frontier_max_sharpe.csv": pd.DataFrame({"frontier": ["A", "B"], "max_sharpe": [2.5, 1.5]}),
+        "sharpe_intervals.csv": pd.DataFrame({"strategy_id": ids, "sharpe": rng.random(5),
+                                              "sharpe_p05": rng.random(5) - 1, "sharpe_p95": rng.random(5) + 1}),
+        "metrics_all.csv": pd.DataFrame({"strategy_id": ids, "ruined": [True, False, False, False, False]}),
+        "turnover_frontier.csv": pd.DataFrame({
+            "tau": taus, "exante_return_given_up_bp_pa": [9.0, 7.0, 5.0, 3.0, 0.4, 0.2, 0.1, 0.0],
+            "cost_saved_bp_pa": [4.0, 3.0, 2.0, 1.0, 0.5, 0.1, 0.05, 0.0], "realised_net_vs_none_bp_pa": rng.random(8)}),
+        "sensitivity_summary.csv": pd.DataFrame({"date": str(cfg.sensitivity.dates[-1]), "strategy": strategies,
+                                                 "mean_abs_change": [40.0, 0.8, 0.6, 0.2, 0.0]}),
+        "cov_eval_qlike_diff.csv": pd.DataFrame({"estimator": [e for e, _ in est], "portfolio_set": [s for _, s in est],
+                                                 "diff_vs_lw_cc": rng.random(6), "p05": rng.random(6) - 1,
+                                                 "p95": rng.random(6) + 1}),
+        "cov_eval.csv": pd.DataFrame({"estimator": [e for e, _ in est], "portfolio_set": [s for _, s in est],
+                                      "bias_ratio": rng.random(6) + 0.5}),
+    }
+
+
+def test_answers_has_4_rows_with_sources(cfg):
+    tables = answer_tables(cfg)
+    out = answers(tables, cfg)
+    assert list(out.columns) == ANSWER_COLUMNS
+    # The 4 research questions (kickoff Section 1), each answered, in order.
+    assert out["question"].unique().tolist() == ["Q1", "Q2", "Q3", "Q4"]
+    assert out.groupby("question").size().tolist() == [6, 4, 6, 4]
+    for row in out.itertuples():
+        src = source_rows(tables[row.source_table], row.source_row)
+        assert len(src) >= 1, row.figure
+        if len(src) == 1:
+            # A single source row holds the value itself, and the interval when there is one.
+            cells = src.iloc[0].tolist()
+            assert row.value in cells, row.figure
+            for bound in (row.p05, row.p95):
+                assert np.isnan(bound) or bound in cells, row.figure
+    a = out.set_index("figure")
+    assert a.loc["ruined set A strategies, of 2", "value"] == 1
+    # Only tau 0.5 lies below the 45 degree line (given up 0.4 < saved 0.5); 0.75 and 1.0 lie above.
+    assert a.loc["largest tau whose point lies below the 45 degree line", "value"] == 0.5
+    last = str(cfg.sensitivity.dates[-1])
+    ratio = a.loc[f"{last}: mean_abs_change ratio, black_litterman|lw_cc|bl|B / mv_constrained|lw_cc|sample|B", "value"]
+    assert ratio == 0.2 / 0.8
+
+
+def test_frontier_max_sharpe(cfg):
+    rng = np.random.default_rng(cfg.run.seed_master)
+    X = rng.normal(0.0, 0.04, (120, len(PANEL)))
+    Sigma = pd.DataFrame(np.cov(X, rowvar=False), index=PANEL, columns=PANEL)
+    S = Sigma.to_numpy()
+    for sign in (1, -1):
+        mu = pd.Series(sign * np.array([0.06, 0.05, 0.02, 0.08, 0.01, 0.04]), index=PANEL)
+        m = mu.to_numpy()
+        A, B, C = m @ np.linalg.solve(S, m), np.linalg.solve(S, m).sum(), np.linalg.solve(S, np.ones(6)).sum()
+        out = frontier_max_sharpe(mu, Sigma, cfg).set_index("frontier")
+        targets = np.concatenate([np.linspace(B / C, 1.0, 200001), np.linspace(1.0, 1e3, 200001)])
+        grid = targets / np.sqrt((C * targets**2 - 2 * B * targets + A) / (A * C - B**2))
+        a = out.loc["A"]
+        if B > 0:
+            assert abs(a.max_sharpe - np.sqrt(A)) <= 1e-12 and a.status == "optimal"
+            assert abs(a.tangency_return / a.tangency_vol - a.max_sharpe) <= 1e-12
+        else:
+            assert a.status == "supremum_not_attained" and np.isnan(a.tangency_return)
+        # No point on the budget-1 frontier beats it, and the frontier gets within 1e-4 of it.
+        assert grid.max() <= a.max_sharpe + 1e-12
+        assert grid.max() >= a.max_sharpe - 1e-4
+        b = out.loc["B"]
+        if sign > 0:
+            assert b.status == "optimal" and b.max_sharpe <= a.max_sharpe + 1e-9
+        else:
+            # Every mu < 0: no long-only portfolio has mu'y = 1, so the set B program is infeasible.
+            assert np.isnan(b.max_sharpe) and b.status != "optimal"
