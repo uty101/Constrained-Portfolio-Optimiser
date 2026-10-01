@@ -13,10 +13,19 @@ from pc.config import Config
 
 
 def window_daily(returns_d: pd.DataFrame, t: pd.Timestamp, months: int) -> pd.DataFrame:
-    """Rows with date in (t - months, t]: exclusive start, inclusive end."""
+    """Rows whose calendar month is in [p - months + 1, p], p the month of t, and date <= t.
+
+    Convention 23: calendar-month periods, never DateOffset arithmetic. Raises ValueError
+    unless every one of the `months` months has at least one row.
+    """
     t = pd.Timestamp(t)
-    start = t - pd.DateOffset(months=months)
-    return returns_d.loc[(returns_d.index > start) & (returns_d.index <= t)]
+    p = t.to_period("M")
+    periods = returns_d.index.to_period("M")
+    rows = returns_d.loc[(periods >= p - (months - 1)) & (returns_d.index <= t)]
+    n_months = rows.index.to_period("M").nunique()
+    if n_months != months:
+        raise ValueError(f"{n_months} calendar months of daily rows for {p - (months - 1)} to {p}; expected {months}")
+    return rows
 
 
 def _frame(values: np.ndarray, X: pd.DataFrame) -> pd.DataFrame:

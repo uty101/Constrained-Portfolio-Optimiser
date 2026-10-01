@@ -14,6 +14,7 @@ from pc.cov import (
     ewma_weights,
     window_daily,
 )
+from pc.calendar import build_calendar
 from pc.data import load_prices
 from pc.returns import daily_returns
 
@@ -39,19 +40,49 @@ def spectral_matrix(eigenvalues: np.ndarray, seed: int) -> pd.DataFrame:
     return pd.DataFrame(0.5 * (A + A.T), index=TICKERS[:n], columns=TICKERS[:n])
 
 
-def test_window_boundaries_exclusive_start_inclusive_end():
+def test_window_boundaries():
+    """Calendar-month periods (convention 23). t is the 28th, so t - DateOffset(months) would
+    have started on the 28th of an earlier month and taken in its 29th to 31st."""
     index = pd.bdate_range("2019-01-01", "2023-06-30", name="date")
     rets = pd.DataFrame({"A": np.arange(len(index), dtype=float)}, index=index)
-    t = pd.Timestamp("2023-03-31")
+    t = pd.Timestamp("2023-02-28")
+    assert t in index
 
-    for months, start in ((1, "2023-02-28"), (36, "2020-03-31")):
-        start = pd.Timestamp(start)
-        assert start in index
+    for months, first_month, offset_extra in (
+        (1, "2023-02", ["2023-01-30", "2023-01-31"]),
+        (3, "2022-12", ["2022-11-29", "2022-11-30"]),
+        (36, "2020-03", []),
+    ):
+        p0 = pd.Period(first_month, "M")
+        expected = index[(index.to_period("M") >= p0) & (index <= t)]
         w = window_daily(rets, t, months)
-        assert start not in w.index
-        assert w.index[0] == index[index.get_loc(start) + 1]
+        assert w.index.equals(expected)
+        assert w.index[0] == index[index.to_period("M") == p0][0]
         assert w.index[-1] == t
-        assert len(w) == ((index > start) & (index <= t)).sum()
+        assert w.index.to_period("M").nunique() == months
+        old = index[(index > t - pd.DateOffset(months=months)) & (index <= t)]
+        assert list(old.difference(w.index)) == [pd.Timestamp(d) for d in offset_extra]
+
+    # A date inside a month: rows after t are excluded, the month itself still counts.
+    w = window_daily(rets, pd.Timestamp("2023-03-15"), 2)
+    assert w.index[0] == pd.Timestamp("2023-02-01") and w.index[-1] == pd.Timestamp("2023-03-15")
+
+    # Too few months of data raises.
+    with pytest.raises(ValueError):
+        window_daily(rets, pd.Timestamp("2019-06-28"), 36)
+
+
+def test_window_matches_calendar_months_real(returns_d, cfg):
+    cal = build_calendar(load_prices(cfg).index, cfg)
+    days = returns_d.index
+    months = cfg.sample.window_months
+    assert len(cal) == cfg.sample.expected_n_decisions
+    for t in cal["decision_date"]:
+        w = window_daily(returns_d, t, months)
+        first_month = t.to_period("M") - (months - 1)
+        assert w.index[0] == days[days.to_period("M") == first_month][0], t
+        assert w.index[-1] == t
+        assert w.index.to_period("M").nunique() == months
 
 
 def test_ridge_sets_cond_to_1e6(cfg):
