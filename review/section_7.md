@@ -492,3 +492,136 @@ See evidence 6.
 5. `pc/report.py` and `tests/test_report.py`
 6. `scripts/run_all.py` and evidence 1 and 6
 7. Open question 1
+
+### Session 7b
+
+From `instructions/07b_final_edits.md`. Commits: `3c9f559` step 7.6 (the 4 wording fixes), `f0a153f` step 7.7 (`decisions/section_7b_review.md`). Each of the 4 old strings occurred exactly once before it was replaced.
+
+#### The 4 diffs (`git diff` before the 7.6 commit)
+
+```diff
+diff --git a/README.md b/README.md
+index 7cd9169..63a778d 100644
+--- a/README.md
++++ b/README.md
+@@ -5,13 +5,13 @@ It also ships `pctrade`, a command-line tool that turns a positions file and any
+ 
+ ## What it found
+ 
+-**Question 1: how much of the in-sample gap survives out of sample?** Very little. In sample, the budget-only frontier offers a maximum Sharpe ratio of 1.72 (a supremum the frontier approaches but never reaches) and the long-only frontier capped at 30% per asset offers 1.10. Out of sample, `mv_constrained|lw_cc|sample|C` earned a Sharpe of 0.67 (90% interval 0.36 to 1.03), equal weight 0.71 (0.39 to 1.11) and `min_variance|lw_cc|none|B` 0.45 (−0.003 to 1.01). No allocator beat equal weight by a margin the bootstrap can tell apart from 0. HRP, under all 4 covariance estimators, is the only allocator whose Sharpe is reliably below equal weight's: on the primary row, `hrp|sample|none|none` trails it by 0.55 with a 90% interval of −1.02 to −0.01. 3 of the 4 unconstrained mean-variance funds went to 0, and the 4th, on the Ledoit-Wolf covariance, was not ruined but lost 98% from peak to trough.
++**Question 1: how much of the in-sample gap survives out of sample?** Capped mean-variance kept 61% of the long-only frontier's Sharpe ratio and 39% of the unconstrained frontier's. In sample, the budget-only frontier offers a maximum Sharpe ratio of 1.72 (a supremum the frontier approaches but never reaches) and the long-only frontier capped at 30% per asset offers 1.10. Out of sample, `mv_constrained|lw_cc|sample|C` earned a Sharpe of 0.67 (90% interval 0.36 to 1.03), equal weight 0.71 (0.39 to 1.11) and `min_variance|lw_cc|none|B` 0.45 (−0.003 to 1.01). No allocator beat equal weight by a margin the bootstrap can tell apart from 0. HRP, under all 4 covariance estimators, is the only allocator whose Sharpe is reliably below equal weight's: on the primary row, `hrp|sample|none|none` trails it by 0.55 with a 90% interval of −1.02 to −0.01. 3 of the 4 unconstrained mean-variance funds went to 0, and the 4th, on the Ledoit-Wolf covariance, was not ruined but lost 98% from peak to trough.
+ 
+ **Question 2: what does a turnover limit cost and save?** At the default limit of τ = 0.30, the fund gives up 7.9 bp a year of ex-ante expected return to save 0.95 bp a year of trading cost. Each limit that binds gives up more expected return than it saves in cost, so no limit in the grid lies below the 45° line. After the fact, the realised effect cannot be told apart from 0: τ = 0.30 returned −7.8 bp a year against no limit (90% interval −41.8 to 24.9), and even the tightest limit, τ = 0.05, returned 125.9 bp a year with an interval of −87.7 to 332.7.
+ 
+ **Question 3: how sensitive are mean-variance weights to noise in expected returns?** Extremely, until a constraint steps in. Perturbing the means by their own sampling error at 2026-07-31 moved the unconstrained weights by a mean absolute change of 109.1 (10,911% of the fund), against 0.94 for the long-only capped version. Bayes-Stein shrinkage of the mean does not steady the weights: its mean absolute change divided by that of the plain capped fund is 0.98 at 2012-12-31, 0.95 at 2020-02-28 and 1.02 at 2026-07-31. Black-Litterman steadies them at 2 of the 3 dates, with ratios of 0.50 and 0.22, but not at 2012-12-31, where its ratio is 1.31.
+ 
+-**Question 4: which covariance estimator forecasts risk best?** It depends on the portfolio. For equal weight, EWMA beats Ledoit-Wolf constant correlation: its QLIKE difference is −0.24 (90% interval −0.58 to −0.005), and lower is better. For the global minimum variance portfolio, the one an optimiser builds, EWMA is worse by 0.45 (interval −0.07 to 1.24) and under-forecasts the risk: its bias ratio is 1.38, against 1.01 for Ledoit-Wolf, where a calibrated forecast sits near 1.
++**Question 4: which covariance estimator forecasts risk best?** It depends on the portfolio. For equal weight, EWMA beats Ledoit-Wolf constant correlation: its QLIKE difference is −0.24 (90% interval −0.58 to −0.005), and lower is better. For the global minimum variance portfolio, the one an optimiser builds, EWMA scores 0.45 worse, though that interval (−0.07 to 1.24) includes 0. The clearer signal is the bias: EWMA under-forecasts that portfolio's risk with a bias ratio of 1.38, outside the 0.92 to 1.08 band for a calibrated forecast, against 1.01 for Ledoit-Wolf.
+ 
+ ## Setup
+ 
+@@ -98,7 +98,7 @@ Bias ratio 90% band for a correct forecast over 196 months: 0.92 to 1.08. A QLIK
+ 
+ Scaling every cost by 0 and by 3 tells us whether the ranking depends on the cost model. In the first table below, look for any change in the order of the Sharpe columns: there is none.
+ 
+-Estimating the covariance from 36 monthly returns instead of daily ones puts 18 assets against 36 observations. The second table compares the 2 strategies most exposed to that. Unconstrained mean-variance blows up far sooner on the monthly estimate, while capped minimum variance barely notices.
++Estimating the covariance from 36 monthly returns instead of daily ones puts 18 assets against 36 observations. The second table compares the 2 strategies most exposed to that. Unconstrained mean-variance blows up far sooner on the monthly estimate. Capped minimum variance keeps a similar Sharpe ratio but trades about twice as much.
+ 
+ <!-- readme_robustness.md -->
+ **Cost scales.** Every one-way cost multiplied by the scale.
+diff --git a/docs/DESIGN_NOTE.md b/docs/DESIGN_NOTE.md
+index 2e375c2..4294faf 100644
+--- a/docs/DESIGN_NOTE.md
++++ b/docs/DESIGN_NOTE.md
+@@ -10,7 +10,7 @@ A portfolio implementation desk turns a model's target weights into orders a fun
+ 
+ **The turnover limit.** A turnover budget caps how much of the fund trades each month. It protects against an optimiser that chases noise, and it keeps orders within what the desk can execute without moving prices. At τ = 0.30 the limit bound in 62 months. In this backtest, every binding limit gave up more ex-ante expected return than it saved in modelled cost, and the realised effect cannot be told apart from 0. The limit earns its place as a guard on execution and on model error rather than as a source of return.
+ 
+-**Flat basis-point costs in the objective.** Putting cost into the objective makes the optimiser trade only when the expected gain beats the spread. With costs scaled to 0, 1 and 3 times their base level, the capped mean-variance fund's mean turnover fell from 0.22 to 0.18 to 0.12, while its Sharpe ratio barely moved. Flat costs ignore market impact, so the objective understates the cost of large trades; for a $10m book in these ETFs that is a small error.
++**Flat basis-point costs in the objective.** Putting cost into the objective makes the optimiser trade only when the expected gain beats the spread. With costs scaled to 0, 1 and 3 times their base level, the capped mean-variance fund's mean turnover fell from 0.22 to 0.18 to 0.12, while its Sharpe ratio barely moved. Flat costs ignore market impact, so the objective understates the cost of large trades, an error this repo does not measure.
+ 
+ **The feasibility relaxation.** A drifted weight can sit above its cap. If the turnover budget is too small to bring it back, the problem has no solution, so the rule solves with the smallest turnover that restores the cap, plus 1e-6, and records that the limit was relaxed. The ordering is deliberate: a mandate breach outranks a turnover budget, because a breach is a compliance event and an overspent budget is not. The demo book holds GLD at 40% against a 30% cap, and merely reaching the feasible set takes turnover of 0.2501. At τ = 0.05 the backtest relaxed the limit in 4 months.
+ 
+```
+
+#### `run_all` after both commits
+
+stdout below without the demo's printed summary, which is unchanged from evidence 1. stderr held only the cvxpy `UserWarning` lines.
+
+```
+data.write_data_issues: 0.1 s
+data.write_data_summary: 0.1 s
+cov_eval.write_cov_eval: 2.9 s
+backtest.write_walk_forward: 78.6 s
+stats.write_metrics: 0.5 s
+stats.write_sharpe_intervals: 2.2 s
+stats.write_results_primary: 0.1 s
+charts.write_charts: 1.2 s
+sensitivity.write_sensitivity: 140.3 s
+experiments.write_turnover_frontier: 36.1 s
+experiments.write_cost_sensitivity: 48.8 s
+experiments.write_monthly_cov: 2.2 s
+experiments.write_levered: 2.1 s
+experiments.write_answers: 0.2 s
+report.write_readme_tables: 0.1 s
+total estimated cost: 899.56 (0.8996 bp of NAV)
+cli.main (6.5 demo): 0.1 s
+total: 315.5 s
+exit 0
+```
+
+`git status --porcelain` after the run (empty: the prose edits touch no generated file):
+
+```
+
+```
+
+#### Style grep on the 2 edited files
+
+`grep -n -E " — | – | - |robust|resilient|rigorous|leverag|grounded|delve|crucial|landscape|notably" README.md docs/DESIGN_NOTE.md`:
+
+```
+README.md:103:<!-- readme_robustness.md -->
+README.md:124:<!-- /readme_robustness.md -->
+exit 0
+```
+
+The 2 hits are the `readme_robustness.md` marker comments, as in evidence 3. None of the 4 new sentences match.
+
+#### Tests
+
+`.venv\Scripts\python -m pytest --disable-socket -q`:
+
+```
+........................................................................ [ 27%]
+........................................................................ [ 54%]
+........................................................................ [ 82%]
+..............................................                           [100%]
+============================== warnings summary ===============================
+tests/test_backtest.py: 16 warnings
+tests/test_experiments.py: 19 warnings
+  C:\Utkarsh\10. Quant Projects\5) Constrained Portfolio Optimiser\pc\solver.py:77: UserWarning: Solution may be inaccurate. Try another solver, adjusting the solver settings, or solve with verbose=True for more information.
+    prob.solve(solver=name, **_options(name, scfg))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+262 passed, 35 warnings in 18.20s
+```
+
+#### Fresh clone
+
+Cloned from GitHub at `f0a153f` into `%TEMP%\pcs7b`; `.venv` built as in amendment 2; `.venv\Scripts\python -m pytest --disable-socket -q` (amendment 3); the folder was then deleted. The cvxpy warning lines inside the warnings summary are filtered out, as in evidence 6.
+
+```
+f0a153f section 7: reviewer decisions and close-out
+........................................................................ [ 27%]
+........................................................................ [ 54%]
+........................................................................ [ 82%]
+..............................................                           [100%]
+============================== warnings summary ===============================
+tests/test_backtest.py: 16 warnings
+tests/test_experiments.py: 19 warnings
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+262 passed, 35 warnings in 31.22s
+deleted: True
+```
