@@ -18,13 +18,21 @@ QLIKE_SETS = [("ew", "EW"), ("gmv", "GMV"), ("random", "random")]
 QLIKE_REFERENCE = "lw_cc"
 
 
+MINUS = "\u2212"
+
+
+def minus(text: str) -> str:
+    """A leading ASCII hyphen as a typographic minus sign, so README tables match the prose."""
+    return MINUS + text[1:] if text.startswith("-") else text
+
+
 def pct(x: float) -> str:
-    return f"{x * 100:.1f}%"
+    return minus(f"{x * 100:.1f}%")
 
 
 def num(x: float, dp: int) -> str:
     """x to dp decimals, with no negative zero."""
-    return f"{round(x, dp) + 0.0:.{dp}f}"
+    return minus(f"{round(x, dp) + 0.0:.{dp}f}")
 
 
 def interval(value: float, lo: float, hi: float, dp: int) -> str:

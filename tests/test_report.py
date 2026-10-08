@@ -19,6 +19,7 @@ def test_number_formats():
     assert num(-1.2e-07, 1) == "0.0"
     assert num(-0.0027, 2) == "0.00"
     assert interval(0.6738, 0.3633, 1.0267, 2) == "0.67 (0.36 to 1.03)"
+    assert num(-0.31, 2) == "\u22120.31"
 
 
 def test_turnover_table_drops_none_row():
@@ -29,4 +30,4 @@ def test_turnover_table_drops_none_row():
     })
     lines = turnover_table(frontier).splitlines()
     assert len(lines) == 3
-    assert lines[2] == "| 0.3 | 62 | 7.9 | 1.0 | -7.8 (-41.8 to 24.9) |"
+    assert lines[2] == "| 0.3 | 62 | 7.9 | 1.0 | \u22127.8 (\u221241.8 to 24.9) |"

@@ -1,6 +1,6 @@
 # Conventions resolved
 
-Each convention below is fixed by `instructions/00_kickoff.md`. Where it differs from the source doc (`Project Outline/03_Portfolio_Optimiser.docx`), this list wins.
+Each convention below is fixed by `instructions/00_kickoff.md`. Where it differs from the source doc (`project_outline/03_Portfolio_Optimiser.docx`), this list wins.
 
 1. **Information set.** Everything used at decision date t (means, covariances, views, momentum) uses prices dated ≤ t only.
 2. **Execution at t+1 close.** Target weights trade at the close of the next trading day after t. Executing at the decision close would use that close twice.
@@ -17,10 +17,10 @@ Each convention below is fixed by `instructions/00_kickoff.md`. Where it differs
 13. **Ledoit-Wolf ddof.** `cov_lw_cc` uses ddof 0 (S = Xm′Xm/T, as in the authors' covCor.m) in production. ddof 1 exists only for the PyPortfolioOpt cross-check test.
 14. **HRP linkage.** Single linkage is applied to the distance matrix d directly (the PyPortfolioOpt convention), not to the Euclidean distance between columns of d.
 15. **Ridge rule.** If cond(Σ) > 1e6, add r·I with r = max(0, (λ_max − 1e6·λ_min)/(1e6 − 1)), which sets cond to exactly 1e6. Condition number before and after, and r, are logged for every call. Applied to every Σ before any allocator sees it.
-16. **Solver fallback and hold rule.** cvxpy with CLARABEL; on any status other than optimal, one retry with SCS (eps 1e-9). If SCS is not optimal, the allocator returns drifted w_prev with `fallback = True` and the status string.
+16. **Solver fallback and hold rule.** cvxpy with CLARABEL; on any status other than optimal, 1 retry with SCS (eps 1e-9). If SCS is not optimal, the allocator returns drifted w_prev with `fallback = True` and the status string.
 17. **τ feasibility relaxation.** Before solving set C, τ_min = min ‖w − w_prev‖₁ s.t. 1′w = 1, 0 ≤ w ≤ 0.30. If τ_min > τ, the solve uses τ_eff = τ_min + 1e-6 and records `tau_relaxed = True` and τ_eff.
 18. **BL covariance.** The Black-Litterman allocator optimises on μ_BL with Σ_BL. The round-trip test (mean-variance on (Π, Σ) with γ = δ returns w_mkt) uses Σ, not Σ_BL.
-19. **Two output tables.** The source doc asked for one long DataFrame. `weights_long.parquet` (per asset) and `periods.parquet` (per period), keyed by (strategy_id, decision_date), replace it because per-asset and per-period fields do not share a grain.
+19. **2 output tables.** The source doc asked for 1 long DataFrame. `weights_long.parquet` (per asset) and `periods.parquet` (per period), keyed by (strategy_id, decision_date), replace it because per-asset and per-period fields do not share a grain.
 20. **Package layout.** The package is named `pc`; the CLI lives in `pc/cli.py` (console script `pctrade`), not a top-level `cli.py`.
 21. **Black-Litterman allocator.** `black_litterman(mu, Sigma, w_prev, cons) -> AllocResult` in `pc/allocators.py` is a thin wrapper that calls `mv_constrained` unchanged. The backtest computes μ_BL and Σ_BL in its return-model stage and passes them in as `mu` and `Sigma`.
 22. **Formula constants.** Constants written inside a formula in the kickoff or an instruction file (1.645 in 5.6, the 1e-6 in the τ relaxation, the 1e-12 lower bound in risk parity, Uniform(0.5, 1.5) in the look-ahead test) may be literals, each with a comment citing where the formula is written. Every other number comes from `config.toml`.

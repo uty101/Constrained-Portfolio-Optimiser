@@ -14,7 +14,7 @@
 
 | Σ from | Strategy | Months | Ann. return | Vol | Sharpe | Max DD | Monthly turnover |
 |---|---|---:|---:|---:|---:|---:|---:|
-| daily | `mv_unconstrained\|sample\|sample\|A` | 191 | -100.0% | 109.0% | ruined (2026-02) | -100.0% | 2907.8% |
-| monthly | `mv_unconstrained\|sample\|sample\|A` | 9 | -100.0% | 203.8% | ruined (2010-12) | -100.0% | 41966.1% |
-| daily | `min_variance\|sample\|none\|B` | 196 | 3.2% | 3.6% | 0.46 | -10.6% | 3.4% |
-| monthly | `min_variance\|sample\|none\|B` | 196 | 3.5% | 3.6% | 0.54 | -9.7% | 6.6% |
+| daily | `mv_unconstrained\|sample\|sample\|A` | 191 | −100.0% | 109.0% | ruined (2026-02) | −100.0% | 2907.8% |
+| monthly | `mv_unconstrained\|sample\|sample\|A` | 9 | −100.0% | 203.8% | ruined (2010-12) | −100.0% | 41966.1% |
+| daily | `min_variance\|sample\|none\|B` | 196 | 3.2% | 3.6% | 0.46 | −10.6% | 3.4% |
+| monthly | `min_variance\|sample\|none\|B` | 196 | 3.5% | 3.6% | 0.54 | −9.7% | 6.6% |
